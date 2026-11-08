@@ -414,6 +414,34 @@
   .modal-actions .btn-cancel { background: #fff; color: var(--muted); }
   .modal-actions .btn-save { background: var(--brand); color: #fff; border-color: var(--brand); }
 
+  /* 엑셀 등록 모달 */
+  .excel-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .excel-actions button, .excel-actions .file-btn {
+    font: inherit; font-size: 12.5px; font-weight: 700; padding: 8px 12px; border-radius: 7px;
+    border: 1px solid var(--line); background: #fff; color: var(--ink); cursor: pointer;
+  }
+  .excel-actions .file-btn { background: #eff7f3; border-color: #cce0d6; color: var(--brand); }
+  .excel-actions .file-name { font-size: 12px; color: var(--muted); }
+  .excel-msg { font-size: 12.5px; line-height: 1.55; padding: 9px 12px; border-radius: 7px; margin-bottom: 10px; }
+  .excel-msg.err { background: #fff3f3; border: 1px solid #ffd0d0; color: #a32020; }
+  .excel-msg.info { background: #eff7f3; border: 1px solid #cde3d8; color: #1d5a49; }
+  .excel-msg ul { margin: 4px 0 0; padding-left: 18px; }
+  .excel-trip { border: 1px solid var(--line); border-radius: 9px; margin-bottom: 10px; overflow: hidden; }
+  .excel-trip-head {
+    display: flex; justify-content: space-between; gap: 8px; align-items: center;
+    padding: 8px 12px; background: #f6f9f7; font-size: 13px; font-weight: 800;
+  }
+  .excel-trip-head .mode { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+  .excel-trip-head .mode.new { background: #e3f2eb; color: #1d6b57; }
+  .excel-trip-head .mode.update { background: #fff4e5; color: #a8590f; }
+  .excel-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .excel-table th, .excel-table td { padding: 5px 8px; border-top: 1px solid var(--line); text-align: left; vertical-align: top; }
+  .excel-table th { font-size: 11px; color: var(--muted); font-weight: 700; background: #fbfcfb; }
+  .excel-table td.src { white-space: nowrap; font-size: 11px; font-weight: 700; }
+  .excel-table tr.fail td { background: #fff5f5; }
+  .src-excel { color: #2b5c8f; } .src-existing { color: #1d6b57; } .src-search { color: #a8590f; } .src-fail { color: #c62828; }
+  .excel-table small { color: var(--muted); }
+
   /* 관리자 전용 제어 요소 */
   .admin-only { display: none !important; }
   body.is-admin .admin-only { display: inline-flex !important; }
@@ -468,6 +496,7 @@
       </select>
       <button id="btn-fit" type="button">전체 보기</button>
       <button id="btn-copy" type="button">좌표 복사</button>
+      <button id="btn-open-excel" class="admin-only" type="button" title="엑셀 파일로 여러 여행/일차를 한 번에 등록하거나 수정합니다">📥 엑셀 등록</button>
       <button id="btn-calc-route" class="admin-only" type="button" title="현재 여행의 모든 일차를 실제 도로 경로로 다시 계산해 저장합니다">🛣 도로 경로 계산</button>
       <button id="btn-reset-sample" class="admin-only" type="button" style="color:var(--muted); font-size:11px;" title="전주·임실 샘플 여행을 원래대로 되돌립니다 (다른 여행은 그대로)">샘플 복원</button>
     </div>
@@ -561,6 +590,28 @@
     <div class="modal-actions">
       <button type="button" class="btn-cancel" id="btn-close-modal">취소</button>
       <button type="button" class="btn-save" id="btn-save-trip">저장 및 동선 반영</button>
+    </div>
+  </div>
+</div>
+
+<!-- 엑셀 일정 등록 모달 (관리자 전용) -->
+<div class="modal-overlay" id="modal-excel" style="display:none;">
+  <div class="modal-card" style="max-width:760px;">
+    <h2>엑셀로 일정 등록/수정</h2>
+    <p class="sub">
+      양식에 맞춘 엑셀 파일을 올리면 장소 좌표를 확인한 뒤 미리보기를 보여줍니다.
+      <b>같은 여행제목이 이미 있으면 그 여행 전체를 파일 내용으로 바꿉니다.</b>
+      위도·경도를 비워 두면 카카오 장소 검색으로 채우니, 미리보기에서 주소가 맞는지 확인하세요.
+    </p>
+    <div class="excel-actions">
+      <button type="button" id="btn-excel-template">📄 빈 양식 받기</button>
+      <label class="file-btn">📂 엑셀 파일 선택<input type="file" id="input-excel-file" accept=".xlsx,.xls,.csv" hidden></label>
+      <span class="file-name" id="excel-file-name"></span>
+    </div>
+    <div id="excel-preview"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-cancel" id="btn-excel-close">닫기</button>
+      <button type="button" class="btn-save" id="btn-excel-save" disabled>저장 및 동선 반영</button>
     </div>
   </div>
 </div>
@@ -736,6 +787,164 @@ function requestRoadRoute(stops) {
     if (d.errors && d.errors.length) console.warn('도로 경로 일부 실패:', d.errors);
     return { sig: sig, computedAt: new Date().toISOString(), legs: d.legs, failed: (d.errors || []).length };
   });
+}
+
+/**
+ * --------------------------------------------------------------------------
+ * 엑셀 일정 해석 (화면/지도와 무관한 순수 함수: 행 배열 -> 여행 목록 + 오류 목록)
+ * 양식: 여행제목 | 시작일 | 종료일 | 일차 | 순서 | 장소명 | 위도 | 경도 | 메모
+ *  - 같은 여행제목의 행들이 한 여행. 여행제목/시작일/종료일은 첫 행에만 써도 됨 (빈 칸은 위 행을 따름)
+ *  - 일차가 비면 1일차, 순서가 비면 파일에 적힌 순서
+ *  - 위도/경도가 비면 저장 전에 카카오 장소 검색으로 채움
+ * --------------------------------------------------------------------------
+ */
+var XLSX_URL = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+
+var EXCEL_COLUMNS = [
+  { key: 'title', label: '여행제목', aliases: ['여행제목', '제목', '여행명', '여행이름'] },
+  { key: 'start', label: '시작일',   aliases: ['시작일', '시작날짜', '출발일'] },
+  { key: 'end',   label: '종료일',   aliases: ['종료일', '종료날짜', '도착일'] },
+  { key: 'day',   label: '일차',     aliases: ['일차', 'day'] },
+  { key: 'order', label: '순서',     aliases: ['순서', '번호', '방문순서', 'no'] },
+  { key: 'name',  label: '장소명',   aliases: ['장소명', '장소', '행선지', '방문지'] },
+  { key: 'lat',   label: '위도',     aliases: ['위도', 'lat', 'latitude'] },
+  { key: 'lng',   label: '경도',     aliases: ['경도', 'lng', 'lon', 'longitude'] },
+  { key: 'note',  label: '메모',     aliases: ['메모', '비고', '설명', '주소', 'note'] }
+];
+
+function excelCellStr(v) {
+  return v == null ? '' : String(v).trim();
+}
+
+function matchExcelHeader(row) {
+  var map = {};
+  (row || []).forEach(function (cell, idx) {
+    var h = excelCellStr(cell).replace(/\s+/g, '').toLowerCase();
+    if (!h) return;
+    EXCEL_COLUMNS.forEach(function (c) {
+      if (map[c.key] == null && c.aliases.indexOf(h) !== -1) map[c.key] = idx;
+    });
+  });
+  return map;
+}
+
+// 엑셀 날짜(일련번호) 또는 '2026-11-07', '2026.11.7', '2026/11/07', '2026년 11월 7일' -> 'YYYY-MM-DD'
+// 빈 값은 '', 해석 불가는 null
+function normalizeExcelDate(v) {
+  if (v == null || v === '') return '';
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  if (typeof v === 'number') {
+    if (v < 20000 || v > 80000) return null; // 1954~2119년 범위만 날짜로 인정
+    var d = new Date(Math.round((Math.floor(v) - 25569) * 86400000));
+    return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate());
+  }
+  if (v instanceof Date) {
+    if (isNaN(v)) return null;
+    return v.getFullYear() + '-' + pad(v.getMonth() + 1) + '-' + pad(v.getDate());
+  }
+  var m = String(v).trim().match(/^(\d{4})\s*[-./년]\s*(\d{1,2})\s*[-./월]\s*(\d{1,2})\s*일?\.?$/);
+  if (!m) return null;
+  var y = +m[1], mo = +m[2], da = +m[3];
+  var chk = new Date(Date.UTC(y, mo - 1, da));
+  if (chk.getUTCFullYear() !== y || chk.getUTCMonth() !== mo - 1 || chk.getUTCDate() !== da) return null;
+  return y + '-' + pad(mo) + '-' + pad(da);
+}
+
+function parseExcelNumber(v) {
+  var s = excelCellStr(v);
+  if (!s) return '';
+  var n = Number(s.replace(/,/g, ''));
+  return isFinite(n) ? n : null;
+}
+
+// rows: 시트의 2차원 배열 (sheet_to_json header:1). 반환 { trips: [...], errors: [...] }
+function parseScheduleRows(rows) {
+  var errors = [];
+  var headerIdx = -1, col = null;
+  for (var r = 0; r < Math.min(rows.length, 10); r++) {
+    var m = matchExcelHeader(rows[r]);
+    if (m.title != null && m.name != null) { headerIdx = r; col = m; break; }
+  }
+  if (headerIdx < 0) {
+    return { trips: [], errors: ['머리글을 찾지 못했습니다. 첫 줄에 "여행제목", "장소명" 열이 있어야 합니다. (빈 양식을 받아 사용하세요)'] };
+  }
+
+  var byTitle = {}, titles = [], lastTitle = '';
+  for (r = headerIdx + 1; r < rows.length; r++) {
+    var row = rows[r] || [];
+    var get = function (k) { return col[k] != null ? row[col[k]] : ''; };
+    if (!row.some(function (c) { return excelCellStr(c) !== ''; })) continue; // 빈 줄
+    var rowNo = r + 1;
+
+    var title = excelCellStr(get('title')) || lastTitle;
+    var name = excelCellStr(get('name'));
+    if (!title) { errors.push(rowNo + '행: 여행제목이 비어 있습니다.'); continue; }
+    lastTitle = title;
+    if (!name) { errors.push(rowNo + '행: 장소명이 비어 있습니다.'); continue; }
+
+    var trip = byTitle[title];
+    if (!trip) {
+      trip = byTitle[title] = { title: title, startDate: '', endDate: '', firstRow: rowNo, stops: [] };
+      titles.push(title);
+    }
+
+    [['start', 'startDate', '시작일'], ['end', 'endDate', '종료일']].forEach(function (f) {
+      var raw = get(f[0]);
+      if (excelCellStr(raw) === '') return;
+      var dv = normalizeExcelDate(raw);
+      if (dv === null) errors.push(rowNo + '행: ' + f[2] + ' "' + excelCellStr(raw) + '"을(를) 날짜로 읽을 수 없습니다. (예: 2026-11-07)');
+      else if (trip[f[1]] && trip[f[1]] !== dv) errors.push(rowNo + '행: 같은 여행 "' + title + '"인데 ' + f[2] + '이 위 행(' + trip[f[1]] + ')과 다릅니다.');
+      else trip[f[1]] = dv;
+    });
+
+    var dayRaw = excelCellStr(get('day'));
+    var day = dayRaw === '' ? 1 : parseInt(dayRaw.replace(/[^0-9]/g, ''), 10);
+    if (!(day >= 1)) { errors.push(rowNo + '행: 일차 "' + dayRaw + '"가 올바르지 않습니다. (1, 2, 3 ...)'); continue; }
+
+    var order = parseExcelNumber(get('order'));
+    if (order === null) { errors.push(rowNo + '행: 순서 "' + excelCellStr(get('order')) + '"가 숫자가 아닙니다.'); continue; }
+
+    var lat = parseExcelNumber(get('lat')), lng = parseExcelNumber(get('lng'));
+    if (lat === '' && lng === '') { lat = null; lng = null; }
+    else if (lat === '' || lng === '' || lat === null || lng === null) {
+      errors.push(rowNo + '행: 위도와 경도는 둘 다 숫자로 쓰거나 둘 다 비워야 합니다.'); continue;
+    } else if (lat < 32 || lat > 39.5 || lng < 124 || lng > 132) {
+      errors.push(rowNo + '행: 좌표(' + lat + ', ' + lng + ')가 국내 범위를 벗어났습니다. 위도/경도가 바뀌지 않았는지 확인하세요.'); continue;
+    }
+
+    trip.stops.push({
+      row: rowNo, day: day, order: order === '' ? null : order, seq: trip.stops.length,
+      name: name, lat: lat, lng: lng, note: excelCellStr(get('note'))
+    });
+  }
+
+  var trips = titles.map(function (title) {
+    var t = byTitle[title];
+    if (!t.startDate) errors.push('"' + title + '" (' + t.firstRow + '행~): 시작일이 없습니다.');
+    if (!t.endDate) t.endDate = t.startDate;
+    if (t.startDate && t.endDate < t.startDate) errors.push('"' + title + '": 종료일이 시작일보다 빠릅니다.');
+    var totalDays = getDaysDiff(t.startDate, t.endDate);
+
+    var dayMap = {};
+    t.stops.forEach(function (s) {
+      if (t.startDate && s.day > totalDays) {
+        errors.push(s.row + '행: ' + s.day + '일차는 여행 기간(' + totalDays + '일)을 벗어납니다.');
+      }
+      (dayMap[s.day] = dayMap[s.day] || []).push(s);
+    });
+    var days = Object.keys(dayMap).map(Number).sort(function (a, b) { return a - b; }).map(function (n) {
+      var list = dayMap[n];
+      // 그 일차의 모든 행에 순서가 있으면 순서대로, 아니면 파일에 적힌 순서대로
+      if (list.every(function (s) { return s.order != null; })) {
+        list = list.slice().sort(function (a, b) { return (a.order - b.order) || (a.seq - b.seq); });
+      }
+      return { dayNumber: n, stops: list };
+    });
+    return { title: title, startDate: t.startDate, endDate: t.endDate, totalDays: totalDays, days: days };
+  });
+
+  if (!trips.length && !errors.length) errors.push('머리글 아래에 일정 행이 없습니다.');
+  return { trips: trips, errors: errors };
 }
 
 function fetchTrips() {
@@ -1123,7 +1332,8 @@ window.addEventListener('DOMContentLoaded', function () {
         var dayMode = dayLegs === 0 ? '' : (d.roadLegCount === dayLegs ? '도로 ' : (d.roadLegCount ? '' : '직선 '));
         var head = document.createElement('li');
         head.className = 'day-group-header';
-        var dateLabel = d.dateStr ? ' (' + d.dateStr + ')' : '';
+        // 일차 이름에 이미 날짜가 들어 있으면 (예: "2일차 (2026-12-06)") 다시 붙이지 않음
+        var dateLabel = d.dateStr && String(d.dayName || '').indexOf(d.dateStr) === -1 ? ' (' + d.dateStr + ')' : '';
         head.innerHTML = '<span>' + esc(d.dayName + dateLabel) + '</span>' +
                          '<span>' + d.stops.length + '곳 · ' + dayMode + '약 ' + dayDist.toFixed(1) + 'km' +
                          (dayDur > 0 ? ' · ' + fmtDuration(dayDur) : '') + '</span>';
@@ -1770,7 +1980,8 @@ window.addEventListener('DOMContentLoaded', function () {
 
     // 단축키 지원
     window.addEventListener('keydown', function (e) {
-      if (modalForm.style.display === 'flex' || modalAuth.style.display === 'flex') return;
+      if (modalForm.style.display === 'flex' || modalAuth.style.display === 'flex' ||
+          document.getElementById('modal-excel').style.display === 'flex') return;
       if (e.key === ' ') {
         e.preventDefault();
         playBtn.click();
@@ -1788,6 +1999,295 @@ window.addEventListener('DOMContentLoaded', function () {
       }), null, 2);
       navigator.clipboard.writeText(text).then(function () {
         statusEl.textContent = activeStops.length + '개 장소 좌표를 클립보드에 복사했습니다.';
+      });
+    });
+
+    // 11. 엑셀 일정 등록/수정 (관리자 전용) ---------------------------------
+    var modalExcel = document.getElementById('modal-excel');
+    var excelPreviewEl = document.getElementById('excel-preview');
+    var excelSaveBtn = document.getElementById('btn-excel-save');
+    var excelFileInput = document.getElementById('input-excel-file');
+    var excelFileNameEl = document.getElementById('excel-file-name');
+    var excelPlan = null;   // 미리보기를 통과해 저장 대기 중인 여행 목록
+    var xlsxPromise = null;
+
+    // 엑셀 라이브러리(약 950KB)는 관리자가 엑셀 창을 열 때만 불러옴
+    function loadXlsx() {
+      if (window.XLSX) return Promise.resolve(window.XLSX);
+      if (!xlsxPromise) {
+        xlsxPromise = new Promise(function (resolve, reject) {
+          var s = document.createElement('script');
+          s.src = XLSX_URL;
+          s.onload = function () {
+            if (window.XLSX) resolve(window.XLSX);
+            else { xlsxPromise = null; reject(new Error('엑셀 라이브러리를 불러오지 못했습니다.')); }
+          };
+          s.onerror = function () { xlsxPromise = null; reject(new Error('엑셀 라이브러리를 불러오지 못했습니다.')); };
+          document.head.appendChild(s);
+        });
+      }
+      return xlsxPromise;
+    }
+
+    function excelMsg(kind, html) {
+      excelPreviewEl.innerHTML = '<div class="excel-msg ' + kind + '">' + html + '</div>';
+    }
+
+    function errMsg(err) { return err && err.message ? err.message : String(err); }
+
+    document.getElementById('btn-open-excel').addEventListener('click', function () {
+      if (!isAdmin) { alert('관리자 로그인이 필요합니다.'); return; }
+      excelPlan = null;
+      excelSaveBtn.disabled = true;
+      excelFileInput.value = '';
+      excelFileNameEl.textContent = '';
+      excelMsg('info', '처음이라면 <b>빈 양식 받기</b>로 양식을 내려받아 작성한 뒤 파일을 선택하세요. 한 파일에 여러 여행을 넣을 수 있습니다.');
+      modalExcel.style.display = 'flex';
+      loadXlsx().catch(function (err) { excelMsg('err', esc(errMsg(err))); });
+    });
+    document.getElementById('btn-excel-close').addEventListener('click', function () {
+      modalExcel.style.display = 'none';
+    });
+
+    // 빈 양식 (일정 시트 + 작성방법 시트)
+    document.getElementById('btn-excel-template').addEventListener('click', function () {
+      loadXlsx().then(function (XLSX) {
+        var header = EXCEL_COLUMNS.map(function (c) { return c.label; });
+        var ws = XLSX.utils.aoa_to_sheet([header,
+          ['전주 1박 2일 (예시)', '2026-12-05', '2026-12-06', 1, 1, '전주역', '', '', '여행 출발'],
+          ['', '', '', 1, 2, '전주한옥마을', '', '', ''],
+          ['', '', '', 1, 3, '경기전', 35.8154, 127.1496, '좌표를 알면 직접 입력 (검색보다 정확)'],
+          ['', '', '', 2, 1, '오목대', '', '', ''],
+          ['', '', '', 2, 2, '전주고속버스터미널', '', '', '여행 종료']
+        ]);
+        ws['!cols'] = [{ wch: 22 }, { wch: 12 }, { wch: 12 }, { wch: 6 }, { wch: 6 }, { wch: 22 }, { wch: 11 }, { wch: 11 }, { wch: 34 }];
+        var guide = XLSX.utils.aoa_to_sheet([
+          ['열', '필수', '설명'],
+          ['여행제목', '필수', '같은 제목의 행들이 한 여행이 됩니다. 첫 행에만 쓰고 아래는 비워도 됩니다. 이미 있는 제목이면 그 여행 전체를 이 파일 내용으로 바꿉니다.'],
+          ['시작일', '필수', '2026-12-05 형식 또는 엑셀 날짜. 여행의 첫 행에만 써도 됩니다.'],
+          ['종료일', '선택', '비우면 당일치기(시작일과 같은 날).'],
+          ['일차', '선택', '1, 2, 3 ... 비우면 1일차. 여행 기간을 넘으면 오류로 표시됩니다.'],
+          ['순서', '선택', '일차 안에서의 방문 순서. 비우면 파일에 적힌 순서대로.'],
+          ['장소명', '필수', '카카오맵에서 검색되는 이름. 같은 이름이 여러 곳이면 "전주 경기전"처럼 지역을 붙이세요.'],
+          ['위도', '선택', '예: 35.8154 (경도와 함께 입력). 비우면 이미 등록된 같은 이름의 장소 → 카카오 장소 검색 순으로 채웁니다.'],
+          ['경도', '선택', '예: 127.1496'],
+          ['메모', '선택', '목록과 정보창에 표시됩니다. 비워 두고 검색으로 찾은 장소에는 주소가 들어갑니다.']
+        ]);
+        guide['!cols'] = [{ wch: 10 }, { wch: 6 }, { wch: 95 }];
+        var wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, '일정');
+        XLSX.utils.book_append_sheet(wb, guide, '작성방법');
+        XLSX.writeFile(wb, '여행일정_양식.xlsx');
+      }).catch(function (err) { alert(errMsg(err)); });
+    });
+
+    // 파일 선택 -> 해석 -> 좌표 채우기 -> 미리보기
+    excelFileInput.addEventListener('change', function () {
+      var file = excelFileInput.files && excelFileInput.files[0];
+      if (!file) return;
+      excelFileNameEl.textContent = file.name;
+      excelPlan = null;
+      excelSaveBtn.disabled = true;
+      excelMsg('info', '파일을 읽는 중...');
+
+      Promise.all([loadXlsx(), file.arrayBuffer()]).then(function (res) {
+        var XLSX = res[0];
+        var wb = XLSX.read(res[1], { type: 'array' });
+        var sheetName = wb.SheetNames.indexOf('일정') !== -1 ? '일정' : wb.SheetNames[0];
+        var rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, raw: true, defval: '' });
+        var parsed = parseScheduleRows(rows);
+        if (parsed.errors.length) {
+          var shown = parsed.errors.slice(0, 30);
+          excelMsg('err', '<b>파일에서 고칠 부분이 ' + parsed.errors.length + '개 있습니다.</b> 엑셀을 고친 뒤 파일을 다시 선택하세요.' +
+            '<ul>' + shown.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') +
+            (parsed.errors.length > shown.length ? '<li>... 외 ' + (parsed.errors.length - shown.length) + '개</li>' : '') + '</ul>');
+          return;
+        }
+        return resolveExcelPlaces(parsed.trips).then(function () {
+          renderExcelPreview(parsed.trips);
+        });
+      }).catch(function (err) {
+        console.error(err);
+        excelMsg('err', '파일을 읽지 못했습니다: ' + esc(errMsg(err)) + '<br>.xlsx 형식으로 저장한 파일인지 확인하세요.');
+      });
+    });
+
+    // 위도/경도가 빈 장소: 이미 등록된 같은 이름 장소 -> 카카오 장소 검색 순으로 채움
+    function resolveExcelPlaces(parsedTrips) {
+      var known = {};
+      trips.forEach(function (t) {
+        t.days.forEach(function (d) { d.stops.forEach(function (st) { known[st.name] = st; }); });
+      });
+      var queue = [];
+      parsedTrips.forEach(function (t) {
+        t.days.forEach(function (d) {
+          d.stops.forEach(function (s) {
+            if (s.lat != null) { s.src = 'excel'; return; }
+            var k = known[s.name];
+            if (k) {
+              s.lat = k.lat; s.lng = k.lng; s.kid = k.kid; s.src = 'existing';
+              if (!s.note && k.note) s.note = k.note;
+              return;
+            }
+            queue.push(s);
+          });
+        });
+      });
+
+      var searched = {}; // 같은 이름은 한 번만 검색
+      var i = 0;
+      return new Promise(function (resolve) {
+        function apply(s, hit) {
+          if (hit) {
+            s.lat = parseFloat(hit.y); s.lng = parseFloat(hit.x); s.kid = hit.id;
+            s.addr = hit.road_address_name || hit.address_name || '';
+            s.placeName = hit.place_name;
+            s.src = 'search';
+            if (!s.note) s.note = s.addr;
+          } else {
+            s.src = 'fail';
+          }
+        }
+        function next() {
+          if (i >= queue.length) { resolve(); return; }
+          var s = queue[i++];
+          if (searched.hasOwnProperty(s.name)) { apply(s, searched[s.name]); next(); return; }
+          excelMsg('info', '장소 위치 검색 중 (' + i + '/' + queue.length + '): ' + esc(s.name));
+          placesService.keywordSearch(s.name, function (result, status) {
+            var hit = (status === kakao.maps.services.Status.OK && result.length) ? result[0] : null;
+            searched[s.name] = hit;
+            apply(s, hit);
+            setTimeout(next, 120);
+          });
+        }
+        next();
+      });
+    }
+
+    var EXCEL_SRC_LABEL = { excel: '엑셀 좌표', existing: '기존 장소', search: '검색', fail: '못 찾음' };
+
+    function renderExcelPreview(parsedTrips) {
+      var failCount = 0, stopCount = 0, searchCount = 0;
+      var body = parsedTrips.map(function (t) {
+        var existing = trips.find(function (x) { return x.tripTitle === t.title; });
+        var period = t.totalDays === 1 ? t.startDate + ' (당일)' : t.startDate + ' ~ ' + t.endDate + ' (' + t.totalDays + '일)';
+        var removed = existing ? existing.days.filter(function (d) {
+          return !t.days.some(function (x) { return x.dayNumber === Number(d.dayNumber); });
+        }).map(function (d) { return d.dayNumber + '일차'; }) : [];
+
+        var rowsHtml = '';
+        t.days.forEach(function (d) {
+          d.stops.forEach(function (s, idx) {
+            stopCount++;
+            if (s.src === 'fail') failCount++;
+            if (s.src === 'search') searchCount++;
+            var detail = s.src === 'fail'
+              ? s.row + '행: 위치를 찾지 못했습니다. 위도·경도를 입력하거나 장소명을 더 구체적으로 써 주세요.'
+              : (s.addr || s.note || '');
+            rowsHtml += '<tr' + (s.src === 'fail' ? ' class="fail"' : '') + '>' +
+              '<td>' + d.dayNumber + '일차</td><td>' + (idx + 1) + '</td>' +
+              '<td>' + esc(s.name) +
+                (s.src === 'search' && s.placeName && s.placeName !== s.name ? '<br><small>검색 결과: ' + esc(s.placeName) + '</small>' : '') + '</td>' +
+              '<td class="src src-' + s.src + '">' + EXCEL_SRC_LABEL[s.src] + '</td>' +
+              '<td>' + esc(detail) + '</td></tr>';
+          });
+        });
+
+        return '<div class="excel-trip"><div class="excel-trip-head">' +
+          '<span>' + esc(t.title) + ' · ' + esc(period) +
+            (removed.length ? ' <small style="color:#a8590f;font-weight:700;">(파일에 없는 ' + esc(removed.join(', ')) + '는 삭제됨)</small>' : '') + '</span>' +
+          '<span class="mode ' + (existing ? 'update' : 'new') + '">' + (existing ? '기존 여행 덮어쓰기' : '새 여행') + '</span>' +
+          '</div><table class="excel-table"><tr><th>일차</th><th>순서</th><th>장소명</th><th>좌표</th><th>주소 · 메모</th></tr>' +
+          rowsHtml + '</table></div>';
+      }).join('');
+
+      var head;
+      if (failCount) {
+        head = '<div class="excel-msg err"><b>' + failCount + '곳의 위치를 찾지 못해 저장할 수 없습니다.</b> 빨간 행에 위도·경도를 직접 넣거나, ' +
+               '장소명을 "전주 경기전"처럼 더 구체적으로 바꾼 뒤 파일을 다시 선택하세요.</div>';
+        excelPlan = null;
+        excelSaveBtn.disabled = true;
+      } else {
+        head = '<div class="excel-msg info">여행 ' + parsedTrips.length + '개, 장소 ' + stopCount + '곳을 확인했습니다.' +
+               (searchCount ? ' <b>검색으로 찾은 ' + searchCount + '곳(주황색)</b>은 주소가 맞는지 확인한 뒤 저장하세요.' : '') + '</div>';
+        excelPlan = parsedTrips;
+        excelSaveBtn.disabled = false;
+      }
+      excelPreviewEl.innerHTML = head + body;
+    }
+
+    // 해석한 여행 -> 저장할 여행 객체 (같은 제목이 있으면 그 여행 id를 이어받아 덮어씀)
+    function buildTripFromExcel(p, k) {
+      var existing = trips.find(function (t) { return t.tripTitle === p.title; });
+      return {
+        tripId: existing ? existing.tripId : 'trip-' + Date.now() + '-' + k,
+        tripTitle: p.title,
+        startDate: p.startDate,
+        endDate: p.endDate,
+        days: p.days.map(function (d) {
+          var c = THEME_COLORS[(d.dayNumber - 1) % THEME_COLORS.length];
+          var dateStr = addDaysToDate(p.startDate, d.dayNumber - 1);
+          var day = {
+            dayNumber: d.dayNumber,
+            dayId: 'day' + d.dayNumber,
+            dayName: p.totalDays <= 1 ? '1일차 (당일 코스)' : d.dayNumber + '일차 (' + dateStr + ')',
+            dateStr: dateStr,
+            color: c.color,
+            glow: c.glow,
+            stops: d.stops.map(function (s, i) {
+              var o = { n: i + 1, name: s.name, lat: s.lat, lng: s.lng };
+              if (s.kid) o.kid = s.kid;
+              if (s.note) o.note = s.note;
+              return o;
+            })
+          };
+          // 장소가 그대로인 일차는 기존 도로 경로를 재사용 (다시 계산하지 않음)
+          var old = existing && existing.days.find(function (x) { return Number(x.dayNumber) === d.dayNumber; });
+          if (old && old.route && old.route.sig === stopsSig(day.stops)) day.route = old.route;
+          return day;
+        })
+      };
+    }
+
+    excelSaveBtn.addEventListener('click', function () {
+      if (!isAdmin || !excelPlan) return;
+      var list = excelPlan;
+      excelPlan = null;
+      excelSaveBtn.disabled = true;
+      stopTour();
+
+      var savedIds = [], routeFailed = 0, routeErrors = 0;
+      var chain = Promise.resolve();
+      list.forEach(function (p, k) {
+        chain = chain.then(function () {
+          excelMsg('info', '저장 중 (' + (k + 1) + '/' + list.length + '): ' + esc(p.title));
+          var trip = buildTripFromExcel(p, k);
+          return upsertTrip(trip).then(function () {
+            var idx = trips.findIndex(function (t) { return t.tripId === trip.tripId; });
+            if (idx >= 0) trips[idx] = trip; else trips.unshift(trip);
+            savedIds.push(trip.tripId);
+            excelMsg('info', '도로 경로 계산 중 (' + (k + 1) + '/' + list.length + '): ' + esc(p.title));
+            return computeRoutesForTrip(trip, true).then(function (r) {
+              routeFailed += r.failed;
+            }, function (err) {
+              console.error(err);
+              routeErrors++;
+            });
+          });
+        });
+      });
+
+      chain.then(function () {
+        modalExcel.style.display = 'none';
+        currentTripId = savedIds[0];
+        updateTripSelector();
+        statusEl.textContent = '엑셀에서 여행 ' + savedIds.length + '개를 저장했습니다.' +
+          (routeErrors ? ' (' + routeErrors + '개 여행은 도로 경로 계산 실패 → 직선 표시, "도로 경로 계산"으로 다시 시도)' :
+           routeFailed ? ' (도로 경로 ' + routeFailed + '개 구간은 직선 표시)' : '');
+      }).catch(function (err) {
+        console.error(err);
+        excelMsg('err', '저장 실패: ' + esc(errMsg(err)) + (savedIds.length ? '<br>앞서 저장된 ' + savedIds.length + '개 여행은 반영되었습니다.' : ''));
+        reloadTrips(savedIds[0] || currentTripId);
       });
     });
 
