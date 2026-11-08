@@ -6,8 +6,8 @@
 //     Edge Functions > Secrets 에 KAKAO_REST_API_KEY 추가
 // - 관리자(admins 표에 등록된 계정)만 호출 가능. 호출자의 로그인 토큰으로
 //   DB의 is_admin()을 물어봐서 확인함 (DB의 RLS와 같은 기준).
-// - 배포 시 "Verify JWT" 옵션은 끄기 (권한 확인은 이 코드가 직접 함)
-//     CLI: supabase functions deploy route --no-verify-jwt
+// - "Verify JWT" 옵션은 켜 둔 기본값 그대로 둬도 됨 (2026-11 확인: publishable 키/로그인
+//   토큰 요청과 CORS 사전 요청 모두 통과). 관리자 확인은 어느 쪽이든 이 코드가 직접 함.
 //
 // 요청:  POST { points: [{ lat, lng }, ...] }   (방문 순서대로, 2~200개)
 // 응답:  { legs: [ { distance(m), duration(초), path: [[lat,lng],...] } | null, ... ],
