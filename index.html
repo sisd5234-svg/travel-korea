@@ -279,11 +279,11 @@
   .spotlight-nav button:hover { background: #f0f4f1; }
 
   /* 마커 펄스 및 커스텀 핀 오버레이 */
+  /* 카카오 CustomOverlay가 이미 좌표 중앙에 맞춰주므로 별도 translate 없음 */
   .pin-wrapper {
     position: relative;
     width: 30px;
     height: 30px;
-    transform: translate(-50%, -50%);
     cursor: pointer;
   }
   .pin-node {
@@ -329,9 +329,7 @@
     background: #ffffff; border: 3px solid #1d6b57;
     box-shadow: 0 4px 12px rgba(0,0,0,0.35);
     display: grid; place-items: center; font-size: 17px;
-    transform: translate(-50%, -50%);
     pointer-events: none;
-    transition: transform 0.2s ease;
   }
 
   @keyframes markerPulse {
@@ -1048,6 +1046,7 @@ window.addEventListener('DOMContentLoaded', function () {
     var activeStops = [];
     var activeTourIndex = -1;
     var tourTimer = null;
+    var tourActive = false;
     var animFrameId = null;
 
     // 1. 관리자 모드 전환 (Supabase 로그인 + admins 표 등록 여부로 판단)
@@ -1379,20 +1378,47 @@ window.addEventListener('DOMContentLoaded', function () {
           (totalDur > 0 ? ' · ' + fmtDuration(totalDur) : '') + '</span>';
     }
 
-    // 6. 두 지점 사이 트래블러 부드러운 보간 애니메이션
-    function animateTravelerBetween(fromStop, toStop, durationMs) {
+    // 6. 두 지점 사이 트래블러 이동 애니메이션 (카메라가 차를 따라감)
+    var followPaused = false; // 이동 중 사용자가 지도를 끌면 그 구간은 카메라 추적 중단
+    kakao.maps.event.addListener(map, 'dragstart', function () { followPaused = true; });
+
+    function cancelTravelAnim() {
       if (animFrameId) cancelAnimationFrame(animFrameId);
+      animFrameId = null;
+    }
+
+    // 구간 길이에 맞춘 지도 확대 수준 (짧으면 가깝게, 길면 멀리)
+    function followLevelFor(km) {
+      if (km < 1.5) return 4;
+      if (km < 4) return 5;
+      if (km < 10) return 6;
+      if (km < 25) return 7;
+      return 8;
+    }
+
+    // 구간 길이와 속도 설정에 맞춘 이동 시간 (보통 속도 기준 0.8~3.8초)
+    function travelMsFor(km) {
+      var speedMs = parseInt(speedSelect.value, 10) || 1800;
+      var base = Math.max(800, Math.min(3800, 700 + km * 110));
+      return Math.round(base * speedMs / 1800);
+    }
+
+    // fromStop -> toStop 이동. 끝나면 onArrive 호출 (다른 장소를 고르면 취소되어 호출 안 됨)
+    function animateTravelerBetween(fromStop, toStop, durationMs, onArrive) {
+      cancelTravelAnim();
       if (!fromStop || !toStop) {
         if (toStop) {
           travelerOverlay.setPosition(new kakao.maps.LatLng(toStop.lat, toStop.lng));
           travelerOverlay.setMap(map);
         }
+        if (onArrive) onArrive();
         return;
       }
 
       travelerOverlay.setMap(map);
+      followPaused = false;
       var startTime = performance.now();
-      var animDuration = Math.min(durationMs * 0.65, 1100);
+      var animDuration = durationMs;
 
       // 바로 이전 장소에서 온 경우 + 도로 경로가 있으면 도로를 따라 이동, 아니면 직선 이동
       var pts = (toStop.roadLeg && fromStop.dayId === toStop.dayId && toStop.legPath &&
@@ -1422,16 +1448,23 @@ window.addEventListener('DOMContentLoaded', function () {
         // easeInOutCubic
         var ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
         var cur = pointAt(ease);
-        travelerOverlay.setPosition(new kakao.maps.LatLng(cur[0], cur[1]));
+        var pos = new kakao.maps.LatLng(cur[0], cur[1]);
+        travelerOverlay.setPosition(pos);
+        if (!followPaused) map.setCenter(pos);
         if (t < 1) {
           animFrameId = requestAnimationFrame(frame);
+        } else {
+          animFrameId = null;
+          if (onArrive) onArrive();
         }
       }
       animFrameId = requestAnimationFrame(frame);
     }
 
     // 7. 지점 선택 및 스포트라이트 배너 연동
-    function selectStop(s, pan, prevStopForAnim) {
+    // prevStopForAnim이 있으면 그 장소에서 차가 이동해 오고 카메라가 따라감.
+    // onArrive: 도착(이동이 없으면 즉시) 후 호출
+    function selectStop(s, pan, prevStopForAnim, onArrive) {
       var latlng = new kakao.maps.LatLng(s.lat, s.lng);
 
       Array.prototype.forEach.call(listEl.querySelectorAll('.stop'), function (el) {
@@ -1472,7 +1505,7 @@ window.addEventListener('DOMContentLoaded', function () {
 
       infoOverlay.setContent(infoContent);
       infoOverlay.setPosition(latlng);
-      infoOverlay.setMap(map);
+      infoOverlay.setMap(null); // 정보창은 도착한 뒤에 띄움
 
       // 하단 플로팅 스포트라이트 카드 업데이트
       var idx = activeStops.indexOf(s);
@@ -1495,15 +1528,33 @@ window.addEventListener('DOMContentLoaded', function () {
       var pct = activeStops.length > 0 ? ((idx + 1) / activeStops.length) * 100 : 0;
       progressBar.style.width = pct + '%';
 
-      // 트래블러 마커 이동 연출
-      var speedMs = parseInt(speedSelect.value, 10) || 1800;
-      animateTravelerBetween(prevStopForAnim || s, s, speedMs);
+      var arrive = function () {
+        infoOverlay.setMap(map);
+        if (onArrive) onArrive();
+      };
 
-      if (pan) {
-        map.setLevel(4, { animate: true });
-        map.panTo(latlng);
+      var from = prevStopForAnim && prevStopForAnim !== s ? prevStopForAnim : null;
+      if (from) {
+        // 출발 장소에서 시작해 차를 따라 카메라 이동 (구간 길이에 맞춰 확대 수준 조정)
+        var legKm = (s.roadLeg && from.dayId === s.dayId && from.n === s.n - 1 && s.distFromPrev > 0)
+          ? s.distFromPrev : calcDistanceKm(from, s);
+        var level = followLevelFor(legKm);
+        if (map.getLevel() !== level) map.setLevel(level);
+        map.setCenter(new kakao.maps.LatLng(from.lat, from.lng));
+        statusEl.textContent = s.n + '번 ' + s.name + '(으)로 이동 중...';
+        animateTravelerBetween(from, s, travelMsFor(legKm), function () {
+          statusEl.textContent = s.n + '번 ' + s.name + ' 도착';
+          arrive();
+        });
+      } else {
+        animateTravelerBetween(s, s, 0);
+        if (pan) {
+          map.setLevel(4, { animate: true });
+          map.panTo(latlng);
+        }
+        statusEl.textContent = s.n + '번 ' + s.name + ' 선택됨';
+        arrive();
       }
-      statusEl.textContent = s.n + '번 ' + s.name + ' 선택됨';
     }
 
     // 스포트라이트 이전/다음 버튼
@@ -1524,6 +1575,7 @@ window.addEventListener('DOMContentLoaded', function () {
     // 8. 현재 표시 범위 전체 보기
     function fitCurrentView() {
       stopTour();
+      cancelTravelAnim();
       infoOverlay.setMap(null);
       travelerOverlay.setMap(null);
       spotlightCard.classList.remove('show');
@@ -1558,7 +1610,10 @@ window.addEventListener('DOMContentLoaded', function () {
         activeTourIndex = -1;
       }
 
+      tourActive = true;
+      // 이동(카메라 추적) -> 도착 -> 잠시 머문 뒤 다음 장소로
       function step() {
+        if (!tourActive) return;
         var prevStop = activeTourIndex >= 0 ? activeStops[activeTourIndex] : null;
         activeTourIndex++;
         if (activeTourIndex >= activeStops.length) {
@@ -1566,14 +1621,18 @@ window.addEventListener('DOMContentLoaded', function () {
           statusEl.textContent = '다이내믹 투어가 완료되었습니다!';
           return;
         }
-        var speedMs = parseInt(speedSelect.value, 10) || 1800;
-        selectStop(activeStops[activeTourIndex], true, prevStop);
-        tourTimer = setTimeout(step, speedMs);
+        selectStop(activeStops[activeTourIndex], true, prevStop, function () {
+          if (!tourActive) return;
+          var speedMs = parseInt(speedSelect.value, 10) || 1800;
+          tourTimer = setTimeout(step, Math.round(speedMs * 0.6));
+        });
       }
       step();
     }
 
+    // 일시 정지: 다음 장소로 넘어가지 않음 (달리던 차는 현재 구간 끝까지 이동)
     function stopTour() {
+      tourActive = false;
       if (tourTimer) {
         clearTimeout(tourTimer);
         tourTimer = null;
@@ -1583,7 +1642,7 @@ window.addEventListener('DOMContentLoaded', function () {
     }
 
     playBtn.addEventListener('click', function () {
-      if (tourTimer) stopTour();
+      if (tourActive) stopTour();
       else startTour();
     });
 
