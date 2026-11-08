@@ -433,6 +433,8 @@
 </style>
 <!-- 카카오 지도 API 키 (autoload=false 적용) -->
 <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=106e168f4a54555bab6cb10fe9ffce38&libraries=services&autoload=false"></script>
+<!-- Supabase (공유 DB + 관리자 로그인) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.4/dist/umd/supabase.js"></script>
 </head>
 <body>
 <div class="app">
@@ -440,7 +442,7 @@
     <div class="head">
       <h1>여행 동선 플래너</h1>
       <div class="head-actions">
-        <button class="btn-auth" id="btn-admin-auth">🔒 관리자 인증</button>
+        <button class="btn-auth" id="btn-admin-auth">🔒 관리자 로그인</button>
         <button class="btn-add-tour admin-only" id="btn-open-modal">+ 일정 등록</button>
       </div>
     </div>
@@ -466,7 +468,7 @@
       </select>
       <button id="btn-fit" type="button">전체 보기</button>
       <button id="btn-copy" type="button">좌표 복사</button>
-      <button id="btn-reset-sample" class="admin-only" type="button" style="color:var(--muted); font-size:11px;">초기화</button>
+      <button id="btn-reset-sample" class="admin-only" type="button" style="color:var(--muted); font-size:11px;" title="전주·임실 샘플 여행을 원래대로 되돌립니다 (다른 여행은 그대로)">샘플 복원</button>
     </div>
     <div class="tour-progress-wrap">
       <div class="tour-progress-bar" id="tour-progress-bar"></div>
@@ -496,18 +498,22 @@
   </div>
 </div>
 
-<!-- 관리자 비밀번호 모달 -->
+<!-- 관리자 로그인 모달 (Supabase Auth) -->
 <div class="modal-overlay" id="modal-auth" style="display:none;">
   <div class="modal-card" style="max-width:380px;">
-    <h2>관리자 인증</h2>
-    <p class="sub">일정을 등록·수정·삭제하려면 관리자 암호를 입력하세요.</p>
+    <h2>관리자 로그인</h2>
+    <p class="sub">일정을 등록·수정·삭제하려면 관리자 계정으로 로그인하세요. 일정 보기는 로그인 없이 누구나 가능합니다.</p>
     <div class="form-group">
-      <label>관리자 암호</label>
-      <input type="password" id="input-admin-pw" placeholder="암호 입력" autocomplete="current-password">
+      <label>이메일</label>
+      <input type="email" id="input-admin-email" placeholder="admin@example.com" autocomplete="username">
+    </div>
+    <div class="form-group">
+      <label>비밀번호</label>
+      <input type="password" id="input-admin-pw" placeholder="비밀번호" autocomplete="current-password">
     </div>
     <div class="modal-actions">
       <button type="button" class="btn-cancel" id="btn-close-auth">취소</button>
-      <button type="button" class="btn-save" id="btn-submit-auth">인증하기</button>
+      <button type="button" class="btn-save" id="btn-submit-auth">로그인</button>
     </div>
   </div>
 </div>
@@ -561,11 +567,24 @@
 <script>
 /**
  * --------------------------------------------------------------------------
- * 관리자 인증 보안 설정
+ * Supabase 연결 (publishable 키는 공개되어도 되는 키. 쓰기 권한은 DB의 RLS가 막음)
  * --------------------------------------------------------------------------
  */
-var ADMIN_PASSWORD = '7777';
+var SUPABASE_URL = 'https://geukvqmukwycmeutbnhp.supabase.co';
+var SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_vK-8-doYcwybbq_elONMPw_YYFgnnJ9';
+var sb = (window.supabase && window.supabase.createClient)
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+  : null;
+
 var isAdmin = false;
+var sessionEmail = null; // 로그인한 계정 이메일 (관리자가 아닐 수도 있음)
+
+// innerHTML에 넣는 값은 모두 이스케이프 (공유 데이터라 안전하게)
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
 
 var THEME_COLORS = [
   { color: '#1d6b57', glow: 'rgba(29, 107, 87, 0.45)' },   // 1일차/당일: 포레스트 그린
@@ -632,19 +651,64 @@ var DEFAULT_TRIPS = [
   }
 ];
 
-var STORAGE_KEY = 'MY_TRAVEL_TRIPS_V2';
-
-function loadTrips() {
-  try {
-    var raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch(e) {}
-  return JSON.parse(JSON.stringify(DEFAULT_TRIPS));
+/**
+ * Supabase trips 테이블 <-> 화면용 여행 객체 변환 및 읽기/쓰기
+ */
+function rowToTrip(r) {
+  return {
+    tripId: r.id,
+    tripTitle: r.title,
+    startDate: r.start_date || '',
+    endDate: r.end_date || r.start_date || '',
+    days: Array.isArray(r.days) ? r.days : []
+  };
 }
-function saveTrips(trips) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(trips));
-  } catch(e) {}
+
+// 화면에서 덧붙인 계산용 필드(dayId, color, distFromPrev 등)는 빼고 저장
+function tripToRow(t) {
+  return {
+    id: t.tripId,
+    title: t.tripTitle,
+    start_date: t.startDate || null,
+    end_date: t.endDate || t.startDate || null,
+    days: (t.days || []).map(function (d) {
+      return {
+        dayNumber: d.dayNumber, dayId: d.dayId, dayName: d.dayName, dateStr: d.dateStr,
+        color: d.color, glow: d.glow,
+        stops: (d.stops || []).map(function (s) {
+          var o = { n: s.n, name: s.name, lat: s.lat, lng: s.lng };
+          if (s.kid) o.kid = s.kid;
+          if (s.note) o.note = s.note;
+          return o;
+        })
+      };
+    })
+  };
+}
+
+function fetchTrips() {
+  if (!sb) return Promise.reject(new Error('Supabase 라이브러리를 불러오지 못했습니다.'));
+  return sb.from('trips')
+    .select('id,title,start_date,end_date,days')
+    .order('created_at', { ascending: false })
+    .then(function (res) {
+      if (res.error) throw res.error;
+      return res.data.map(rowToTrip);
+    });
+}
+
+function upsertTrip(trip) {
+  return sb.from('trips').upsert(tripToRow(trip)).select('id').then(function (res) {
+    if (res.error) throw res.error;
+    if (!res.data || !res.data.length) throw new Error('저장 권한이 없습니다.');
+  });
+}
+
+function deleteTripRow(tripId) {
+  return sb.from('trips').delete().eq('id', tripId).select('id').then(function (res) {
+    if (res.error) throw res.error;
+    if (!res.data || !res.data.length) throw new Error('삭제 권한이 없거나 이미 삭제된 여행입니다.');
+  });
 }
 
 // 두 좌표 사이 직선 거리(km) 계산 (Haversine)
@@ -678,8 +742,8 @@ window.addEventListener('DOMContentLoaded', function () {
   }
 
   kakao.maps.load(function () {
-    var trips = loadTrips();
-    var currentTripId = trips[0] ? trips[0].tripId : null;
+    var trips = [];
+    var currentTripId = null;
     var currentTab = 'all';
 
     var container = document.getElementById('map');
@@ -715,6 +779,7 @@ window.addEventListener('DOMContentLoaded', function () {
 
     var authBtn = document.getElementById('btn-admin-auth');
     var modalAuth = document.getElementById('modal-auth');
+    var inputAdminEmail = document.getElementById('input-admin-email');
     var inputAdminPw = document.getElementById('input-admin-pw');
 
     var currentOverlays = [];
@@ -724,39 +789,81 @@ window.addEventListener('DOMContentLoaded', function () {
     var tourTimer = null;
     var animFrameId = null;
 
-    // 1. 관리자 모드 전환
+    // 1. 관리자 모드 전환 (Supabase 로그인 + admins 표 등록 여부로 판단)
     function setAdminState(state) {
       isAdmin = state;
       document.body.classList.toggle('is-admin', isAdmin);
+      authBtn.classList.toggle('logged-in', !!sessionEmail);
       if (isAdmin) {
-        authBtn.textContent = '🔓 관리자 모드';
-        authBtn.classList.add('logged-in');
-        statusEl.textContent = '관리자 모드 활성화: 일정 등록, 수정, 삭제가 가능합니다.';
+        authBtn.textContent = '🔓 관리자 (로그아웃)';
+        authBtn.title = sessionEmail || '';
+      } else if (sessionEmail) {
+        authBtn.textContent = '🔓 로그아웃';
+        authBtn.title = sessionEmail + ' (관리자 권한 없음)';
       } else {
-        authBtn.textContent = '🔒 관리자 인증';
-        authBtn.classList.remove('logged-in');
-        statusEl.textContent = '일반 열람 모드입니다.';
+        authBtn.textContent = '🔒 관리자 로그인';
+        authBtn.title = '';
       }
     }
 
+    // 저장된 로그인 세션을 확인하고 관리자 여부를 DB에 물어봄
+    function refreshAdminState() {
+      if (!sb) { sessionEmail = null; setAdminState(false); return Promise.resolve(false); }
+      return sb.auth.getSession().then(function (r) {
+        var session = r.data && r.data.session;
+        if (!session) { sessionEmail = null; setAdminState(false); return false; }
+        sessionEmail = session.user.email || '';
+        return sb.rpc('is_admin').then(function (res) {
+          var ok = !res.error && res.data === true;
+          setAdminState(ok);
+          return ok;
+        });
+      }).catch(function (err) {
+        console.error(err);
+        setAdminState(false);
+        return false;
+      });
+    }
+
     authBtn.addEventListener('click', function () {
-      if (isAdmin) {
-        if (confirm('관리자 모드를 종료하시겠습니까?')) setAdminState(false);
+      if (sessionEmail) {
+        if (!confirm('로그아웃하시겠습니까?')) return;
+        sb.auth.signOut().finally(function () {
+          sessionEmail = null;
+          setAdminState(false);
+          statusEl.textContent = '로그아웃했습니다. 일반 열람 모드입니다.';
+        });
       } else {
+        if (!sb) { alert('Supabase에 연결할 수 없어 로그인할 수 없습니다.'); return; }
         inputAdminPw.value = '';
         modalAuth.style.display = 'flex';
-        inputAdminPw.focus();
+        (inputAdminEmail.value ? inputAdminPw : inputAdminEmail).focus();
       }
     });
     document.getElementById('btn-close-auth').addEventListener('click', function () { modalAuth.style.display = 'none'; });
     document.getElementById('btn-submit-auth').addEventListener('click', function () {
-      if (inputAdminPw.value === ADMIN_PASSWORD) {
+      var submitBtn = document.getElementById('btn-submit-auth');
+      var email = inputAdminEmail.value.trim();
+      var pw = inputAdminPw.value;
+      if (!email || !pw) { alert('이메일과 비밀번호를 입력해주세요.'); return; }
+      submitBtn.disabled = true;
+      submitBtn.textContent = '로그인 중...';
+      sb.auth.signInWithPassword({ email: email, password: pw }).then(function (res) {
+        if (res.error) throw res.error;
+        return refreshAdminState();
+      }).then(function (ok) {
         modalAuth.style.display = 'none';
-        setAdminState(true);
-      } else {
-        alert('암호가 일치하지 않습니다.');
+        statusEl.textContent = ok
+          ? '관리자 모드 활성화: 일정 등록, 수정, 삭제가 가능합니다.'
+          : '로그인했지만 관리자로 등록되지 않은 계정입니다. (보기만 가능)';
+        if (!ok) alert('이 계정은 관리자로 등록되어 있지 않습니다.\nSupabase의 admins 표에 등록해야 수정할 수 있습니다.');
+      }).catch(function (err) {
+        alert('로그인 실패: ' + (err && err.message ? err.message : err));
         inputAdminPw.select();
-      }
+      }).finally(function () {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '로그인';
+      });
     });
     inputAdminPw.addEventListener('keydown', function (e) {
       if (e.key === 'Enter') document.getElementById('btn-submit-auth').click();
@@ -841,8 +948,8 @@ window.addEventListener('DOMContentLoaded', function () {
           var pinWrap = document.createElement('div');
           pinWrap.className = 'pin-wrapper';
           pinWrap.id = 'pin-' + day.dayId + '-' + s.n;
-          pinWrap.innerHTML = '<div class="pin-pulse" style="background:' + day.glow + '"></div>' +
-                              '<div class="pin-node" style="background:' + day.color + '">' + s.n + '</div>';
+          pinWrap.innerHTML = '<div class="pin-pulse" style="background:' + esc(day.glow) + '"></div>' +
+                              '<div class="pin-node" style="background:' + esc(day.color) + '">' + esc(s.n) + '</div>';
 
           var overlay = new kakao.maps.CustomOverlay({
             position: latlng,
@@ -936,7 +1043,7 @@ window.addEventListener('DOMContentLoaded', function () {
         var head = document.createElement('li');
         head.className = 'day-group-header';
         var dateLabel = d.dateStr ? ' (' + d.dateStr + ')' : '';
-        head.innerHTML = '<span>' + d.dayName + dateLabel + '</span>' +
+        head.innerHTML = '<span>' + esc(d.dayName + dateLabel) + '</span>' +
                          '<span>' + d.stops.length + '곳 · 약 ' + dayDist.toFixed(1) + 'km</span>';
         listEl.appendChild(head);
 
@@ -949,10 +1056,10 @@ window.addEventListener('DOMContentLoaded', function () {
             ? '<span class="dist-badge">+' + s.distFromPrev.toFixed(1) + 'km</span>'
             : '<span class="dist-badge" style="background:#e3f2eb;color:#1d6b57;">출발</span>';
 
-          li.innerHTML = '<span class="num" style="background:' + d.color + '">' + s.n + '</span>' +
+          li.innerHTML = '<span class="num" style="background:' + esc(d.color) + '">' + esc(s.n) + '</span>' +
                          '<div class="info">' +
-                         '<div class="name-row"><span class="name">' + s.name + '</span>' + distHtml + '</div>' +
-                         (s.note ? '<small>' + s.note + '</small>' : '') +
+                         '<div class="name-row"><span class="name">' + esc(s.name) + '</span>' + distHtml + '</div>' +
+                         (s.note ? '<small>' + esc(s.note) + '</small>' : '') +
                          '</div>';
 
           li.addEventListener('click', function () {
@@ -971,7 +1078,7 @@ window.addEventListener('DOMContentLoaded', function () {
         : '📅 날짜 미지정';
 
       statsBarEl.innerHTML =
-        '<span class="stat-pill highlight">' + periodStr + '</span>' +
+        '<span class="stat-pill highlight">' + esc(periodStr) + '</span>' +
         '<span class="stat-pill">📍 방문 ' + activeStops.length + '곳</span>' +
         '<span class="stat-pill">🚗 직선 이동 약 ' + totalDist.toFixed(1) + 'km</span>';
     }
@@ -1031,15 +1138,15 @@ window.addEventListener('DOMContentLoaded', function () {
       var infoContent = document.createElement('div');
       infoContent.className = 'custom-info';
       infoContent.innerHTML =
-        '<span class="tag" style="background:' + s.color + '">' + s.dayNumber + '일차 · ' + s.n + '번째</span>' +
-        '<div class="title">' + s.n + '. ' + s.name + '</div>' +
+        '<span class="tag" style="background:' + esc(s.color) + '">' + esc(s.dayNumber) + '일차 · ' + esc(s.n) + '번째</span>' +
+        '<div class="title">' + esc(s.n) + '. ' + esc(s.name) + '</div>' +
         '<div class="desc">' +
           (s.distFromPrev > 0 ? '이전 장소에서 약 <b>' + s.distFromPrev.toFixed(2) + 'km</b><br>' : '일정 출발지<br>') +
-          (s.note ? s.note : '') +
+          (s.note ? esc(s.note) : '') +
         '</div>' +
         '<div class="links">' +
-          '<a href="' + link + '" target="_blank" rel="noopener">상세보기 ↗</a>' +
-          '<a href="' + navLink + '" target="_blank" rel="noopener">길찾기 🚗</a>' +
+          '<a href="' + esc(link) + '" target="_blank" rel="noopener">상세보기 ↗</a>' +
+          '<a href="' + esc(navLink) + '" target="_blank" rel="noopener">길찾기 🚗</a>' +
         '</div>';
 
       infoOverlay.setContent(infoContent);
@@ -1390,7 +1497,9 @@ window.addEventListener('DOMContentLoaded', function () {
         stops: stops
       };
 
+      var savedTrip;
       if (targetTrip) {
+        savedTrip = targetTrip;
         targetTrip.tripTitle = tripTitle;
         targetTrip.startDate = sDate;
         targetTrip.endDate = eDate;
@@ -1412,19 +1521,50 @@ window.addEventListener('DOMContentLoaded', function () {
         currentTripId = targetTrip.tripId;
       } else {
         var newId = 'trip-' + Date.now();
-        trips.unshift({
+        savedTrip = {
           tripId: newId,
           tripTitle: tripTitle,
           startDate: sDate,
           endDate: eDate,
           days: [newDayObj]
-        });
+        };
+        trips.unshift(savedTrip);
         currentTripId = newId;
       }
 
-      saveTrips(trips);
-      updateTripSelector();
-      if (diffDays > 1) switchTab('day' + selectedDayNum);
+      statusEl.textContent = '서버에 저장하는 중...';
+      upsertTrip(savedTrip).then(function () {
+        updateTripSelector();
+        if (diffDays > 1) switchTab('day' + selectedDayNum);
+        statusEl.textContent = '"' + tripTitle + '" 일정을 저장했습니다. 모든 방문자에게 반영됩니다.';
+      }).catch(function (err) {
+        console.error(err);
+        alert('저장 실패: ' + (err && err.message ? err.message : err) + '\n서버의 최신 일정으로 다시 불러옵니다.');
+        reloadTrips(currentTripId);
+      });
+    }
+
+    // 서버에서 여행 목록을 다시 불러와 화면 갱신 (실패하면 샘플 일정을 읽기 전용으로 표시)
+    function reloadTrips(preferTripId) {
+      statusEl.textContent = '여행 일정을 불러오는 중...';
+      var loadError = null;
+      return fetchTrips().then(function (list) {
+        trips = list;
+      }).catch(function (err) {
+        console.error(err);
+        loadError = err;
+        trips = JSON.parse(JSON.stringify(DEFAULT_TRIPS));
+      }).then(function () {
+        var has = function (id) { return trips.some(function (t) { return t.tripId === id; }); };
+        if (preferTripId && has(preferTripId)) currentTripId = preferTripId;
+        else if (!has(currentTripId)) currentTripId = trips[0] ? trips[0].tripId : null;
+        updateTripSelector();
+        if (loadError) {
+          statusEl.textContent = '⚠ 서버 연결 실패: 샘플 일정을 표시 중입니다 (' + (loadError.message || loadError) + ')';
+        } else if (!trips.length) {
+          statusEl.textContent = '등록된 여행이 없습니다. 관리자 로그인 후 일정을 등록하세요.';
+        }
+      });
     }
 
     tripSelectEl.addEventListener('change', function () {
@@ -1440,23 +1580,33 @@ window.addEventListener('DOMContentLoaded', function () {
         return;
       }
       var trip = trips.find(function (t) { return t.tripId === currentTripId; });
-      if (confirm('"' + trip.tripTitle + '" 여행 전체를 삭제하시겠습니까?')) {
-        trips = trips.filter(function (t) { return t.tripId !== currentTripId; });
-        saveTrips(trips);
-        currentTripId = trips[0].tripId;
+      if (!trip) return;
+      if (!confirm('"' + trip.tripTitle + '" 여행 전체를 삭제하시겠습니까?\n모든 방문자에게서 사라지며 되돌릴 수 없습니다.')) return;
+      var deletingId = trip.tripId;
+      deleteTripRow(deletingId).then(function () {
+        trips = trips.filter(function (t) { return t.tripId !== deletingId; });
+        currentTripId = trips[0] ? trips[0].tripId : null;
         updateTripSelector();
-      }
+        statusEl.textContent = '"' + trip.tripTitle + '" 여행을 삭제했습니다.';
+      }).catch(function (err) {
+        console.error(err);
+        alert('삭제 실패: ' + (err && err.message ? err.message : err));
+      });
     });
 
-    // 초기 샘플 복원
+    // 샘플 여행 복원 (전주·임실 샘플 한 건만 원래대로 덮어씀, 다른 여행은 유지)
     document.getElementById('btn-reset-sample').addEventListener('click', function () {
       if (!isAdmin) return;
-      if (confirm('초기 전주·임실 1일차 통합 데이터로 초기화하시겠습니까?')) {
-        localStorage.removeItem(STORAGE_KEY);
-        trips = loadTrips();
-        currentTripId = trips[0].tripId;
-        updateTripSelector();
-      }
+      if (!confirm('전주·임실 샘플 여행을 처음 상태로 되돌리시겠습니까?\n(다른 여행은 그대로 유지됩니다)')) return;
+      var sample = JSON.parse(JSON.stringify(DEFAULT_TRIPS[0]));
+      upsertTrip(sample).then(function () {
+        return reloadTrips(sample.tripId);
+      }).then(function () {
+        statusEl.textContent = '샘플 여행을 복원했습니다.';
+      }).catch(function (err) {
+        console.error(err);
+        alert('복원 실패: ' + (err && err.message ? err.message : err));
+      });
     });
 
     // 단축키 지원
@@ -1482,7 +1632,13 @@ window.addEventListener('DOMContentLoaded', function () {
       });
     });
 
-    updateTripSelector();
+    inputAdminEmail.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') inputAdminPw.focus();
+    });
+
+    // 시작: 서버에서 일정 불러오기 + 저장된 로그인 세션 확인
+    reloadTrips();
+    refreshAdminState();
   });
 });
 </script>
