@@ -1,0 +1,15 @@
+# 비밀 키 / 환경 변수 (REST API 키 등은 절대 커밋하지 않음)
+.env
+.env.*
+!.env.example
+
+# Supabase 로컬 작업 파일
+supabase/.temp/
+supabase/.branches/
+
+# 기타
+node_modules/
+.DS_Store
+Thumbs.db
+*.log
+~$*.xlsx
