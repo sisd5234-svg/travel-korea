@@ -469,11 +469,31 @@
     display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important;
   }
 
+  /* 사이드바 접기/펼치기 */
+  .btn-side-toggle {
+    position: absolute; top: 10px; left: 10px; z-index: 20;
+    display: flex; align-items: center; gap: 5px;
+    padding: 7px 11px; border-radius: 8px;
+    border: 1px solid rgba(29, 107, 87, 0.25);
+    background: rgba(255, 255, 255, 0.96);
+    color: #143d30; font: inherit; font-size: 12.5px; font-weight: 700;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12); cursor: pointer;
+  }
+  .btn-side-toggle:hover { background: #fff; }
+  .app.side-collapsed { grid-template-columns: 1fr; }
+  .app.side-collapsed > .side { display: none; }
+
   @media (max-width: 768px) {
     .app { grid-template-columns: 1fr; grid-template-rows: 50% 50%; }
+    .app.side-collapsed { grid-template-rows: 100%; }
     .app > .map-wrap { order: -1; }
     .side { border-right: 0; border-top: 1px solid var(--line); }
-    .spotlight-card { bottom: 12px; padding: 10px 14px; min-width: 280px; }
+    /* 모바일: 숨김 버튼은 지도 아래쪽 가운데 */
+    .btn-side-toggle {
+      top: auto; bottom: 0; left: 50%; transform: translateX(-50%);
+      border-radius: 10px 10px 0 0; border-bottom: 0;
+    }
+    .spotlight-card { bottom: 44px; padding: 10px 14px; min-width: 280px; }
   }
 </style>
 <!-- 카카오 지도 API 키 (autoload=false 적용) -->
@@ -483,7 +503,7 @@
 </head>
 <body>
 <div class="app">
-  <aside class="side">
+  <aside class="side" id="side-panel">
     <div class="head">
       <h1>여행 동선 플래너</h1>
       <div class="head-actions">
@@ -529,6 +549,7 @@
 
   <div class="map-wrap">
     <div id="map" aria-label="카카오 지도"></div>
+    <button type="button" class="btn-side-toggle" id="btn-side-toggle" aria-controls="side-panel" aria-expanded="true">◀ 목록 숨기기</button>
     <!-- 플로팅 스포트라이트 배너 -->
     <div class="spotlight-card" id="spotlight-card">
       <div class="spotlight-badge" id="sp-num">1</div>
@@ -1036,6 +1057,34 @@ window.addEventListener('DOMContentLoaded', function () {
 
     map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
     map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
+
+    // 사이드바 접기/펼치기 (상태는 브라우저에 기억)
+    (function () {
+      var appEl = document.querySelector('.app');
+      var btn = document.getElementById('btn-side-toggle');
+      function apply(collapsed) {
+        var center = map.getCenter();
+        appEl.classList.toggle('side-collapsed', collapsed);
+        var mobile = window.matchMedia('(max-width: 768px)').matches;
+        btn.textContent = collapsed
+          ? (mobile ? '▲ 목록 보기' : '▶ 목록 보기')
+          : (mobile ? '▼ 목록 숨기기' : '◀ 목록 숨기기');
+        btn.setAttribute('aria-expanded', String(!collapsed));
+        map.relayout();
+        map.setCenter(center);
+      }
+      var saved = false;
+      try { saved = localStorage.getItem('sideCollapsed') === '1'; } catch (e) {}
+      apply(saved);
+      window.matchMedia('(max-width: 768px)').addEventListener('change', function () {
+        apply(appEl.classList.contains('side-collapsed'));
+      });
+      btn.addEventListener('click', function () {
+        var next = !appEl.classList.contains('side-collapsed');
+        apply(next);
+        try { localStorage.setItem('sideCollapsed', next ? '1' : '0'); } catch (e) {}
+      });
+    })();
 
     var placesService = new kakao.maps.services.Places();
     var infoOverlay = new kakao.maps.CustomOverlay({ yAnchor: 1.25, zIndex: 100 });
