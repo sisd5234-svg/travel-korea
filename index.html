@@ -1384,17 +1384,8 @@ window.addEventListener('DOMContentLoaded', function () {
           });
         });
 
-        // 경로에 마우스를 올리면 그 여행 전체를 굵게, 누르면 그 여행으로 이동
-        tripLines.forEach(function (line) {
-          kakao.maps.event.addListener(line, 'mouseover', function () {
-            tripLines.forEach(function (l) { l.setOptions({ strokeWeight: 7, strokeOpacity: 1 }); });
-            statusEl.textContent = trip.tripTitle + ' (누르면 이 여행만 봅니다)';
-          });
-          kakao.maps.event.addListener(line, 'mouseout', function () {
-            tripLines.forEach(function (l) { l.setOptions({ strokeWeight: 4, strokeOpacity: 0.85 }); });
-          });
-          kakao.maps.event.addListener(line, 'click', function () { openTrip(trip.tripId); });
-        });
+        // 주의: 폴리라인에 이벤트(click/mouseover)를 붙이면 카카오가 선 SVG 레이어 전체에서
+        // 터치를 가로채 모바일에서 지도를 끌 수 없게 됨. 그래서 선 강조/이동은 목록과 마커로만 함.
 
         totalStops += tripStops;
         totalDist += tripDist;
@@ -1422,7 +1413,7 @@ window.addEventListener('DOMContentLoaded', function () {
         '<span class="stat-pill">🚗 약 ' + totalDist.toFixed(1) + 'km</span>';
 
       fitCurrentView();
-      statusEl.textContent = '여행 ' + trips.length + '개의 경로를 모두 표시합니다. 경로나 목록을 누르면 그 여행만 봅니다.';
+      statusEl.textContent = '여행 ' + trips.length + '개의 경로를 모두 표시합니다. 목록이나 장소 점을 누르면 그 여행만 봅니다.';
     }
 
     // 4. 탭 전환
