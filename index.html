@@ -228,6 +228,12 @@
     font-size: 10.5px; font-weight: 600; color: #5c7267; background: #eef3f0;
     padding: 1px 6px; border-radius: 10px; flex: none;
   }
+  .stop .dist-badge .mode-icon { margin-right: 3px; }
+  .stop .mode-select {
+    font: inherit; font-size: 10.5px; color: inherit; background: #fff;
+    border: 1px solid #c9d8cf; border-radius: 8px; padding: 0 2px; margin-right: 4px;
+    max-width: 82px; cursor: pointer;
+  }
   .stop small { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* 카카오 지도 & 플로팅 배너 컨테이너 */
@@ -329,6 +335,15 @@
     background: #ffffff; border: 3px solid #1d6b57;
     box-shadow: 0 4px 12px rgba(0,0,0,0.35);
     display: grid; place-items: center; font-size: 17px;
+    pointer-events: none;
+  }
+
+  /* 구간 가운데 이동수단 아이콘 (자동차 제외). 지도 드래그를 막지 않도록 이벤트 없음 */
+  .mode-badge {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #fff; border: 2px solid #1d6b57;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    display: grid; place-items: center; font-size: 13px; line-height: 1;
     pointer-events: none;
   }
 
@@ -655,6 +670,8 @@
       <label>세부 행선지 목록 (방문 순서대로 줄바꿈 또는 쉼표 구분)</label>
       <textarea id="input-stops-text" placeholder="예:&#10;전주역&#10;전주남부시장&#10;색장정미소&#10;운서정&#10;임실치즈테마파크"></textarea>
       <div class="tip">💡 이미 좌표가 등록된 기존 장소는 수정 시에도 정확한 기존 좌표를 그대로 유지하며, 새로 추가한 장소명만 카카오 장소 검색으로 자동 변환합니다.</div>
+      <div class="tip">🚆 이동수단은 장소 뒤에 <b>@수단</b>으로 적습니다 (이전 장소에서 그 장소까지). 예: <code>부산역 @기차</code>, <code>해운대 @지하철</code>. 생략하면 자동차.<br>
+        쓸 수 있는 수단: 자동차, 버스, 도보, 자전거, 지하철, 기차, 비행기, 배</div>
     </div>
 
     <div class="modal-actions">
@@ -859,6 +876,7 @@ function tripToRow(t) {
           var o = { n: s.n, name: s.name, lat: s.lat, lng: s.lng };
           if (s.kid) o.kid = s.kid;
           if (s.note) o.note = s.note;
+          if (s.mode && s.mode !== 'car' && TRANSPORT_MODES[s.mode]) o.mode = s.mode;
           return o;
         })
       };
@@ -871,9 +889,82 @@ function tripToRow(t) {
  * day.route = { sig, computedAt, legs: [ {distance(m), duration(초), path:[[lat,lng],...]} | null ] }
  * sig는 계산 당시 장소 좌표 목록. 장소가 바뀌면 sig가 달라져 직선으로 돌아감.
  */
+/**
+ * 이동수단: stop.mode = 이전 장소에서 이 장소까지 온 수단 (없으면 자동차). 일차의 첫 장소는 무시.
+ *  - road: 카카오 자동차 길찾기 경로를 따라 그림 (자동차, 버스)
+ *  - 나머지는 직선(비행기는 곡선)으로 그리고, 소요 시간은 평균 속도(kmh)와 우회 계수(detour)로 추정
+ *  - style: 카카오 Polyline strokeStyle (수단마다 다른 선 모양)
+ */
+var TRANSPORT_MODES = {
+  car:    { label: '자동차', icon: '🚗', road: true, style: 'solid',
+            aliases: ['자동차', '차', '승용차', '렌트카', '렌터카', '택시', 'car', 'drive', 'taxi'] },
+  bus:    { label: '버스', icon: '🚌', road: true, kmh: 22, style: 'dash',
+            aliases: ['버스', '시내버스', '고속버스', '시외버스', '셔틀', '셔틀버스', 'bus'] },
+  walk:   { label: '도보', icon: '🚶', kmh: 4, detour: 1.3, style: 'shortdot',
+            aliases: ['도보', '걷기', '걸어서', '산책', 'walk'] },
+  bike:   { label: '자전거', icon: '🚲', kmh: 14, detour: 1.3, style: 'shortdashdot',
+            aliases: ['자전거', '따릉이', 'bike', 'bicycle'] },
+  subway: { label: '지하철', icon: '🚇', kmh: 32, detour: 1.3, style: 'longdash',
+            aliases: ['지하철', '전철', '도시철도', 'metro', 'subway'] },
+  train:  { label: '기차', icon: '🚆', kmh: 110, detour: 1.2, style: 'longdashdot',
+            aliases: ['기차', '열차', 'ktx', 'srt', 'itx', '무궁화', 'train'] },
+  flight: { label: '비행기', icon: '✈️', kmh: 450, detour: 1, style: 'dot', arc: true,
+            aliases: ['비행기', '항공', '항공기', '비행', 'flight', 'plane', 'air'] },
+  ship:   { label: '배', icon: '⛴️', kmh: 30, detour: 1.1, style: 'dashdot',
+            aliases: ['배', '선박', '페리', '여객선', '유람선', 'ship', 'ferry', 'boat'] }
+};
+var TRANSPORT_ORDER = ['car', 'bus', 'walk', 'bike', 'subway', 'train', 'flight', 'ship'];
+
+function stopMode(s) {
+  return (s && TRANSPORT_MODES[s.mode]) ? s.mode : 'car';
+}
+
+// '기차', 'KTX', '🚆', 'train' 등 -> 'train'. 빈 값은 'car', 알 수 없으면 null
+function parseTransportMode(v) {
+  var raw = String(v == null ? '' : v).trim();
+  if (!raw) return 'car';
+  var s = raw.replace(/\s+/g, '').toLowerCase();
+  for (var i = 0; i < TRANSPORT_ORDER.length; i++) {
+    var k = TRANSPORT_ORDER[i], m = TRANSPORT_MODES[k];
+    if (s === k || m.aliases.indexOf(s) !== -1 || raw === m.icon || raw.replace(/️/g, '') === m.icon.replace(/️/g, '')) return k;
+  }
+  return null;
+}
+
+// 도로 경로 없이 추정한 소요 시간(초). km는 그려진 경로 길이(도로면 도로 거리, 아니면 직선 거리)
+function estimateDurationSec(mode, km, onRoad) {
+  var m = TRANSPORT_MODES[mode];
+  if (!m || !m.kmh || !(km > 0)) return 0;
+  return Math.round((km * (onRoad ? 1 : (m.detour || 1))) / m.kmh * 3600);
+}
+
+// 두 지점 사이 곡선(비행기 구간용): 진행 방향 왼쪽으로 살짝 휜 2차 베지어
+function arcPath(a, b) {
+  var lat1 = Number(a.lat), lng1 = Number(a.lng), lat2 = Number(b.lat), lng2 = Number(b.lng);
+  var cosLat = Math.cos(((lat1 + lat2) / 2) * Math.PI / 180);
+  var dx = (lng2 - lng1) * cosLat, dy = lat2 - lat1;
+  var cx = (lng1 + lng2) / 2 * cosLat - dy * 0.18, cy = (lat1 + lat2) / 2 + dx * 0.18;
+  var pts = [];
+  for (var i = 0; i <= 24; i++) {
+    var t = i / 24, u = 1 - t;
+    var x = u * u * lng1 * cosLat + 2 * u * t * cx + t * t * lng2 * cosLat;
+    var y = u * u * lat1 + 2 * u * t * cy + t * t * lat2;
+    pts.push([y, x / cosLat]);
+  }
+  return pts;
+}
+
+// 목록 입력창 한 줄: "장소명" 또는 "장소명 @기차" (자동차는 생략)
+function stopToLine(s, idx) {
+  var m = stopMode(s);
+  return s.name + (idx > 0 && m !== 'car' ? ' @' + TRANSPORT_MODES[m].label : '');
+}
+
+// 장소 좌표 + 도로 계산이 필요 없는 구간 표시('~'). 자동차만 있던 기존 저장 경로의 sig는 그대로 유지됨
 function stopsSig(stops) {
-  return (stops || []).map(function (s) {
-    return Number(s.lat).toFixed(5) + ',' + Number(s.lng).toFixed(5);
+  return (stops || []).map(function (s, i) {
+    return Number(s.lat).toFixed(5) + ',' + Number(s.lng).toFixed(5) +
+      (i > 0 && !TRANSPORT_MODES[stopMode(s)].road ? '~' : '');
   }).join('|');
 }
 
@@ -881,6 +972,58 @@ function hasFreshRoute(day) {
   return !!(day && day.route && Array.isArray(day.route.legs) &&
             day.route.sig === stopsSig(day.stops) &&
             day.route.legs.length === Math.max((day.stops || []).length - 1, 0));
+}
+
+// 장소 s에 이전 장소 a에서 오는 구간 정보를 채움 (a가 없으면 출발지)
+//  legMode: 이동수단, roadLeg: 도로 경로로 그리는지, legPts: 그릴 좌표 [[lat,lng],...]
+//  distFromPrev(km), durFromPrev(초), durEst: 소요 시간이 추정값인지
+function applyLegInfo(s, a, leg) {
+  var mode = a ? stopMode(s) : 'car', m = TRANSPORT_MODES[mode];
+  s.legMode = mode;
+  s.durEst = false;
+  if (!a) {
+    s.distFromPrev = 0; s.durFromPrev = 0; s.legPath = null; s.legPts = null; s.roadLeg = false;
+    return;
+  }
+  var road = !!(m.road && leg && Array.isArray(leg.path) && leg.path.length >= 2);
+  s.roadLeg = road;
+  s.legPath = road ? leg.path : null;
+  s.legPts = road ? leg.path
+    : (m.arc ? arcPath(a, s) : [[Number(a.lat), Number(a.lng)], [Number(s.lat), Number(s.lng)]]);
+  s.distFromPrev = road ? (Number(leg.distance) || 0) / 1000 : calcDistanceKm(a, s);
+  if (road && mode === 'car') {
+    s.durFromPrev = Number(leg.duration) || 0;
+  } else {
+    s.durFromPrev = estimateDurationSec(mode, s.distFromPrev, road);
+    s.durEst = s.durFromPrev > 0;
+  }
+}
+
+// 구간 선 모양: 자동차는 도로면 실선/아니면 짧은 점선(직선), 나머지는 수단별 고유 모양
+function legStrokeStyle(s) {
+  if (s.legMode === 'car') return s.roadLeg ? 'solid' : 'shortdash';
+  return TRANSPORT_MODES[s.legMode].style;
+}
+
+// 목록/정보창에 쓰는 "+1.2km · 약 18분" 문구
+function legDurText(s) {
+  if (!(s.durFromPrev > 0)) return '';
+  return (s.durEst ? '약 ' : '') + fmtDuration(s.durFromPrev);
+}
+
+// 경로 길이의 절반 지점 (수단 아이콘 위치)
+function pathMidpoint(pts) {
+  var cum = [0];
+  for (var i = 1; i < pts.length; i++) {
+    var dy = pts[i][0] - pts[i - 1][0];
+    var dx = (pts[i][1] - pts[i - 1][1]) * Math.cos(pts[i][0] * Math.PI / 180);
+    cum.push(cum[i - 1] + Math.sqrt(dx * dx + dy * dy));
+  }
+  var half = cum[cum.length - 1] / 2, k = 1;
+  while (k < cum.length - 1 && cum[k] < half) k++;
+  var seg = cum[k] - cum[k - 1], f = seg > 0 ? (half - cum[k - 1]) / seg : 0;
+  return new kakao.maps.LatLng(pts[k - 1][0] + (pts[k][0] - pts[k - 1][0]) * f,
+                               pts[k - 1][1] + (pts[k][1] - pts[k - 1][1]) * f);
 }
 
 function fmtDuration(sec) {
@@ -933,8 +1076,26 @@ function matchRouteRule(stop, rules) {
   return best;
 }
 
+// 도로 계산이 필요한 연속 구간 묶음: 자동차/버스 구간이 이어지는 장소 범위마다 길찾기를 따로 요청
+// 반환 { runs: [{ offset: 첫 장소 index, plan }], sig: 전체 규칙 서명 }
+function planRouteRuns(stops, rules) {
+  var runs = [], sigParts = [], n = (stops || []).length, i = 0;
+  while (i < n - 1) {
+    if (!TRANSPORT_MODES[stopMode(stops[i + 1])].road) { i++; continue; }
+    var j = i + 1;
+    while (j < n - 1 && TRANSPORT_MODES[stopMode(stops[j + 1])].road) j++;
+    var plan = planRoutePoints(stops.slice(i, j + 1), rules, i);
+    runs.push({ offset: i, plan: plan });
+    if (plan.sig) sigParts.push(plan.sig);
+    i = j;
+  }
+  return { runs: runs, sig: sigParts.join('|') };
+}
+
 // 장소 목록 -> 길찾기에 보낼 지점 목록(경유지 포함) + 원래 구간별 [시작 지점 index, 작은 구간 수] + 규칙 서명
-function planRoutePoints(stops, rules) {
+// legOffset: 서명에 쓰는 구간 번호의 시작값 (일차 전체 기준 번호)
+function planRoutePoints(stops, rules, legOffset) {
+  legOffset = legOffset || 0;
   var pt = function (s) { return { lat: Number(s.lat), lng: Number(s.lng) }; };
   var fix = function (p) { return Number(p.lat).toFixed(5) + ',' + Number(p.lng).toFixed(5); };
   var points = [], spans = [], sigParts = [];
@@ -956,7 +1117,7 @@ function planRoutePoints(stops, rules) {
     });
     points.push(pt(stops[i + 1]));
     spans.push([start, points.length - 1 - start]);
-    if (used.length) sigParts.push(i + ':' + used.join(';'));
+    if (used.length) sigParts.push((i + legOffset) + ':' + used.join(';'));
   }
   return { points: points, spans: spans, sig: sigParts.join('|') };
 }
@@ -984,15 +1145,10 @@ function mergeSubLegs(subLegs, points, start, count) {
 
 // 저장된 경로가 지금 장소 + 지금 규칙 기준으로도 맞는지 (관리자 재계산 판단용)
 function routeUpToDate(day, rules) {
-  return hasFreshRoute(day) && (day.route.rulesSig || '') === planRoutePoints(day.stops, rules).sig;
+  return hasFreshRoute(day) && (day.route.rulesSig || '') === planRouteRuns(day.stops, rules).sig;
 }
 
-function requestRoadRoute(stops, rules) {
-  var sig = stopsSig(stops);
-  if (!stops || stops.length < 2) {
-    return Promise.resolve({ sig: sig, computedAt: new Date().toISOString(), legs: [], failed: 0 });
-  }
-  var plan = planRoutePoints(stops, rules);
+function invokeRoadRoute(plan) {
   return sb.functions.invoke('route', {
     body: { points: plan.points }
   }).then(function (res) {
@@ -1010,13 +1166,32 @@ function requestRoadRoute(stops, rules) {
       throw new Error('경로 응답 형식이 올바르지 않습니다.');
     }
     if (d.errors && d.errors.length) console.warn('도로 경로 일부 실패:', d.errors);
-    var legs = plan.spans.map(function (sp) { return mergeSubLegs(d.legs, plan.points, sp[0], sp[1]); });
-    var route = { sig: sig, computedAt: new Date().toISOString(), legs: legs };
-    if (plan.sig) route.rulesSig = plan.sig;
-    // 직선으로 남은 작은 구간 수
-    route.failed = d.legs.filter(function (l) { return !l; }).length;
-    return route;
+    return {
+      legs: plan.spans.map(function (sp) { return mergeSubLegs(d.legs, plan.points, sp[0], sp[1]); }),
+      failed: d.legs.filter(function (l) { return !l; }).length // 직선으로 남은 작은 구간 수
+    };
   });
+}
+
+// 자동차/버스 구간만 도로 경로를 계산. 다른 수단 구간은 null (화면에서 직선/곡선으로 그림)
+function requestRoadRoute(stops, rules) {
+  var sig = stopsSig(stops);
+  var n = (stops || []).length;
+  var legs = new Array(Math.max(n - 1, 0)).fill(null);
+  var route = { sig: sig, computedAt: new Date().toISOString(), legs: legs, failed: 0 };
+  if (n < 2) return Promise.resolve(route);
+  var rr = planRouteRuns(stops, rules);
+  if (rr.sig) route.rulesSig = rr.sig;
+  var chain = Promise.resolve();
+  rr.runs.forEach(function (run) {
+    chain = chain.then(function () {
+      return invokeRoadRoute(run.plan).then(function (r) {
+        r.legs.forEach(function (leg, k) { legs[run.offset + k] = leg; });
+        route.failed += r.failed;
+      });
+    });
+  });
+  return chain.then(function () { return route; });
 }
 
 /**
@@ -1039,7 +1214,8 @@ var EXCEL_COLUMNS = [
   { key: 'name',  label: '장소명',   aliases: ['장소명', '장소', '행선지', '방문지'] },
   { key: 'lat',   label: '위도',     aliases: ['위도', 'lat', 'latitude'] },
   { key: 'lng',   label: '경도',     aliases: ['경도', 'lng', 'lon', 'longitude'] },
-  { key: 'note',  label: '메모',     aliases: ['메모', '비고', '설명', '주소', 'note'] }
+  { key: 'note',  label: '메모',     aliases: ['메모', '비고', '설명', '주소', 'note'] },
+  { key: 'mode',  label: '이동수단', aliases: ['이동수단', '교통수단', '이동', '수단', 'mode', 'transport'] }
 ];
 
 function excelCellStr(v) {
@@ -1142,9 +1318,16 @@ function parseScheduleRows(rows) {
       errors.push(rowNo + '행: 좌표(' + lat + ', ' + lng + ')가 국내 범위를 벗어났습니다. 위도/경도가 바뀌지 않았는지 확인하세요.'); continue;
     }
 
+    var mode = parseTransportMode(get('mode'));
+    if (!mode) {
+      errors.push(rowNo + '행: 이동수단 "' + excelCellStr(get('mode')) + '"을(를) 알 수 없습니다. (' +
+        TRANSPORT_ORDER.map(function (k) { return TRANSPORT_MODES[k].label; }).join(', ') + ' 중 하나, 비우면 자동차)');
+      continue;
+    }
+
     trip.stops.push({
       row: rowNo, day: day, order: order === '' ? null : order, seq: trip.stops.length,
-      name: name, lat: lat, lng: lng, note: excelCellStr(get('note'))
+      name: name, lat: lat, lng: lng, note: excelCellStr(get('note')), mode: mode
     });
   }
 
@@ -1303,6 +1486,7 @@ window.addEventListener('DOMContentLoaded', function () {
 
     var currentOverlays = [];
     var currentPolylines = [];
+    var currentModeBadges = []; // 구간 가운데 이동수단 아이콘 (자동차 제외)
     var activeStops = [];
     var activeTourIndex = -1;
     var tourTimer = null;
@@ -1311,7 +1495,10 @@ window.addEventListener('DOMContentLoaded', function () {
 
     // 1. 관리자 모드 전환 (Supabase 로그인 + admins 표 등록 여부로 판단)
     function setAdminState(state) {
+      var changed = isAdmin !== state;
       isAdmin = state;
+      // 목록의 이동수단 드롭다운(관리자 전용)이 로그인/로그아웃 즉시 나타나고 사라지도록 목록을 다시 그림
+      if (changed && currentTripId && currentTripId !== ALL_TRIPS_ID) renderListAndStats();
       if (!isAdmin) routeRules = null; // 다른 계정으로 바뀌면 규칙을 다시 불러오도록
       document.body.classList.toggle('is-admin', isAdmin);
       authBtn.classList.toggle('logged-in', !!sessionEmail);
@@ -1421,8 +1608,10 @@ window.addEventListener('DOMContentLoaded', function () {
 
       currentOverlays.forEach(function (o) { o.setMap(null); });
       currentPolylines.forEach(function (p) { p.setMap(null); });
+      currentModeBadges.forEach(function (o) { o.setMap(null); });
       currentOverlays = [];
       currentPolylines = [];
+      currentModeBadges = [];
 
       var allMode = currentTripId === ALL_TRIPS_ID;
       document.body.classList.toggle('all-trips-mode', allMode);
@@ -1467,7 +1656,8 @@ window.addEventListener('DOMContentLoaded', function () {
 
         // 저장된 도로 경로가 현재 장소 목록과 일치할 때만 사용 (장소가 바뀌었으면 직선으로 표시)
         var legs = hasFreshRoute(day) ? day.route.legs : null;
-        day.roadLegCount = 0;
+        day.roadLegCount = 0;   // 도로 경로로 그린 구간 수
+        day.roadNeedCount = 0;  // 도로 경로가 필요한(자동차/버스) 구간 수
 
         day.stops.forEach(function (s, sIdx) {
           s.dayId = day.dayId;
@@ -1475,20 +1665,9 @@ window.addEventListener('DOMContentLoaded', function () {
           s.dayName = day.dayName;
           s.color = day.color;
           s.glow = day.glow;
-
-          var leg = (legs && sIdx > 0) ? legs[sIdx - 1] : null;
-          if (leg && Array.isArray(leg.path) && leg.path.length >= 2) {
-            s.distFromPrev = (Number(leg.distance) || 0) / 1000;
-            s.durFromPrev = Number(leg.duration) || 0;
-            s.legPath = leg.path;
-            s.roadLeg = true;
-            day.roadLegCount++;
-          } else {
-            s.distFromPrev = sIdx > 0 ? calcDistanceKm(day.stops[sIdx - 1], s) : 0;
-            s.durFromPrev = 0;
-            s.legPath = null;
-            s.roadLeg = false;
-          }
+          applyLegInfo(s, sIdx > 0 ? day.stops[sIdx - 1] : null, legs ? legs[sIdx - 1] : null);
+          if (sIdx > 0 && TRANSPORT_MODES[s.legMode].road) day.roadNeedCount++;
+          if (s.roadLeg) day.roadLegCount++;
 
           var latlng = new kakao.maps.LatLng(s.lat, s.lng);
 
@@ -1518,19 +1697,19 @@ window.addEventListener('DOMContentLoaded', function () {
         });
 
         // 구간별 이중 폴리라인 (배경 후광선 + 메인선)
-        //  - 도로 경로가 있는 구간: 도로를 따라가는 실선
-        //  - 경로가 없는 구간: 두 장소를 잇는 점선 (직선)
+        //  - 자동차: 도로 경로가 있으면 도로를 따라가는 실선, 없으면 직선 점선
+        //  - 버스: 도로 경로를 따라가는 긴 점선 / 그 외 수단: 수단별 선 모양의 직선 (비행기는 곡선)
+        //  - 자동차가 아닌 구간은 선 가운데에 수단 아이콘 표시
         for (var i = 1; i < day.stops.length; i++) {
-          var a = day.stops[i - 1], b = day.stops[i];
-          var linePath = b.roadLeg
-            ? b.legPath.map(function (p) { return new kakao.maps.LatLng(p[0], p[1]); })
-            : [new kakao.maps.LatLng(a.lat, a.lng), new kakao.maps.LatLng(b.lat, b.lng)];
+          var b = day.stops[i];
+          var linePath = b.legPts.map(function (p) { return new kakao.maps.LatLng(p[0], p[1]); });
+          var solidish = b.legMode === 'car' && b.roadLeg;
 
           var glowLine = new kakao.maps.Polyline({
             path: linePath,
             strokeWeight: b.roadLeg ? 9 : 8,
             strokeColor: day.color,
-            strokeOpacity: b.roadLeg ? 0.25 : 0.18,
+            strokeOpacity: solidish ? 0.25 : 0.18,
             strokeStyle: 'solid'
           });
           glowLine.setMap(map);
@@ -1542,11 +1721,26 @@ window.addEventListener('DOMContentLoaded', function () {
             strokeWeight: b.roadLeg ? 5 : 4,
             strokeColor: day.color,
             strokeOpacity: 0.9,
-            strokeStyle: b.roadLeg ? 'solid' : 'shortdash'
+            strokeStyle: legStrokeStyle(b)
           });
           mainLine.setMap(map);
           mainLine.dayId = day.dayId;
           currentPolylines.push(mainLine);
+
+          if (b.legMode !== 'car') {
+            var modeEl = document.createElement('div');
+            modeEl.className = 'mode-badge';
+            modeEl.style.borderColor = day.color;
+            modeEl.textContent = TRANSPORT_MODES[b.legMode].icon;
+            var modeOverlay = new kakao.maps.CustomOverlay({
+              position: pathMidpoint(b.legPts),
+              content: modeEl,
+              zIndex: 0
+            });
+            modeOverlay.setMap(map);
+            modeOverlay.dayId = day.dayId;
+            currentModeBadges.push(modeOverlay);
+          }
         }
       });
 
@@ -1601,19 +1795,14 @@ window.addEventListener('DOMContentLoaded', function () {
             currentOverlays.push(overlay);
 
             if (sIdx === 0) return;
-            var a = stops[sIdx - 1];
-            var leg = legs ? legs[sIdx - 1] : null;
-            var road = !!(leg && Array.isArray(leg.path) && leg.path.length >= 2);
-            tripDist += road ? (Number(leg.distance) || 0) / 1000 : calcDistanceKm(a, s);
-            var path = road
-              ? leg.path.map(function (p) { return new kakao.maps.LatLng(p[0], p[1]); })
-              : [new kakao.maps.LatLng(a.lat, a.lng), new kakao.maps.LatLng(s.lat, s.lng)];
+            applyLegInfo(s, stops[sIdx - 1], legs ? legs[sIdx - 1] : null);
+            tripDist += s.distFromPrev;
             var line = new kakao.maps.Polyline({
-              path: path,
+              path: s.legPts.map(function (p) { return new kakao.maps.LatLng(p[0], p[1]); }),
               strokeWeight: 4,
               strokeColor: color,
               strokeOpacity: 0.85,
-              strokeStyle: road ? 'solid' : 'shortdash'
+              strokeStyle: legStrokeStyle(s)
             });
             line.setMap(map);
             line.dayId = trip.tripId;
@@ -1648,7 +1837,7 @@ window.addEventListener('DOMContentLoaded', function () {
       statsBarEl.innerHTML =
         '<span class="stat-pill highlight">🗺 여행 ' + trips.length + '개</span>' +
         '<span class="stat-pill">📍 방문 ' + totalStops + '곳</span>' +
-        '<span class="stat-pill">🚗 약 ' + totalDist.toFixed(1) + 'km</span>';
+        '<span class="stat-pill">🧭 이동 약 ' + totalDist.toFixed(1) + 'km</span>';
 
       fitCurrentView();
       statusEl.textContent = '여행 ' + trips.length + '개의 경로를 모두 표시합니다. 목록이나 장소 점을 누르면 그 여행만 봅니다.';
@@ -1669,7 +1858,7 @@ window.addEventListener('DOMContentLoaded', function () {
         var show = (dayId === 'all' || o.dayId === dayId);
         o.setMap(show ? map : null);
       });
-      currentPolylines.forEach(function (p) {
+      currentPolylines.concat(currentModeBadges).forEach(function (p) {
         var show = (dayId === 'all' || p.dayId === dayId);
         p.setMap(show ? map : null);
       });
@@ -1689,37 +1878,68 @@ window.addEventListener('DOMContentLoaded', function () {
         : trip.days.filter(function (d) { return d.dayId === currentTab; });
 
       activeStops = [];
-      var totalDist = 0, totalDur = 0, legCount = 0, roadCount = 0;
+      var totalDist = 0, totalDur = 0, roadNeed = 0, roadCount = 0, anyEst = false;
+      var modeKm = {}; // 수단별 이동 거리
 
       activeDays.forEach(function (d) {
-        var dayDist = 0, dayDur = 0;
-        d.stops.forEach(function (s) { dayDist += (s.distFromPrev || 0); dayDur += (s.durFromPrev || 0); });
+        var dayDist = 0, dayDur = 0, dayEst = false, dayModes = [];
+        d.stops.forEach(function (s, sIdx) {
+          dayDist += (s.distFromPrev || 0);
+          dayDur += (s.durFromPrev || 0);
+          if (s.durEst) dayEst = true;
+          if (sIdx === 0) return;
+          modeKm[s.legMode] = (modeKm[s.legMode] || 0) + (s.distFromPrev || 0);
+          if (dayModes.indexOf(s.legMode) === -1) dayModes.push(s.legMode);
+        });
         totalDist += dayDist;
         totalDur += dayDur;
-        legCount += Math.max(d.stops.length - 1, 0);
+        if (dayEst) anyEst = true;
+        roadNeed += d.roadNeedCount || 0;
         roadCount += d.roadLegCount || 0;
 
+        // 자동차만 쓴 일차는 기존처럼 도로/직선 표시, 수단이 섞이면 쓰인 수단 아이콘 표시
         var dayLegs = Math.max(d.stops.length - 1, 0);
-        var dayMode = dayLegs === 0 ? '' : (d.roadLegCount === dayLegs ? '도로 ' : (d.roadLegCount ? '' : '직선 '));
+        var dayMode = '';
+        if (dayLegs && dayModes.length === 1 && dayModes[0] === 'car') {
+          dayMode = d.roadLegCount === dayLegs ? '도로 ' : (d.roadLegCount ? '' : '직선 ');
+        } else if (dayLegs) {
+          dayMode = TRANSPORT_ORDER.filter(function (k) { return dayModes.indexOf(k) !== -1; })
+            .map(function (k) { return TRANSPORT_MODES[k].icon; }).join('') + ' ';
+        }
         var head = document.createElement('li');
         head.className = 'day-group-header';
         // 일차 이름에 이미 날짜가 들어 있으면 (예: "2일차 (2026-12-06)") 다시 붙이지 않음
         var dateLabel = d.dateStr && String(d.dayName || '').indexOf(d.dateStr) === -1 ? ' (' + d.dateStr + ')' : '';
         head.innerHTML = '<span>' + esc(d.dayName + dateLabel) + '</span>' +
                          '<span>' + d.stops.length + '곳 · ' + dayMode + '약 ' + dayDist.toFixed(1) + 'km' +
-                         (dayDur > 0 ? ' · ' + fmtDuration(dayDur) : '') + '</span>';
+                         (dayDur > 0 ? ' · ' + (dayEst ? '약 ' : '') + fmtDuration(dayDur) : '') + '</span>';
         listEl.appendChild(head);
 
-        d.stops.forEach(function (s) {
+        d.stops.forEach(function (s, sIdx) {
           activeStops.push(s);
           var li = document.createElement('li');
           li.className = 'stop';
           li.id = 'list-item-' + d.dayId + '-' + s.n;
-          var distHtml = s.distFromPrev > 0
-            ? '<span class="dist-badge" title="' + (s.roadLeg ? '이전 장소에서 도로 거리' : '이전 장소에서 직선 거리 (도로 경로 미계산)') + '">' +
-                '+' + s.distFromPrev.toFixed(1) + 'km' + (s.durFromPrev > 0 ? ' · ' + fmtDuration(s.durFromPrev) : '') +
-                (s.roadLeg ? '' : ' (직선)') + '</span>'
-            : '<span class="dist-badge" style="background:#e3f2eb;color:#1d6b57;">출발</span>';
+          var mInfo = TRANSPORT_MODES[s.legMode];
+          var distHtml;
+          if (sIdx === 0) {
+            distHtml = '<span class="dist-badge" style="background:#e3f2eb;color:#1d6b57;">출발</span>';
+          } else {
+            var straightRoad = mInfo.road && !s.roadLeg; // 도로 수단인데 경로 미계산
+            var tip = mInfo.label + ' · ' +
+              (s.roadLeg ? '이전 장소에서 도로 거리' : straightRoad ? '이전 장소에서 직선 거리 (도로 경로 미계산)' : '이전 장소에서 직선 거리') +
+              (s.durEst ? ' · 시간은 평균 속도로 추정' : '');
+            var modeHtml = isAdmin
+              ? '<select class="mode-select" title="이전 장소에서 이동수단 (관리자)">' +
+                  TRANSPORT_ORDER.map(function (k) {
+                    return '<option value="' + k + '"' + (k === s.legMode ? ' selected' : '') + '>' +
+                      TRANSPORT_MODES[k].icon + ' ' + TRANSPORT_MODES[k].label + '</option>';
+                  }).join('') + '</select>'
+              : '<span class="mode-icon">' + mInfo.icon + '</span>';
+            distHtml = '<span class="dist-badge" title="' + esc(tip) + '">' + modeHtml +
+              '+' + s.distFromPrev.toFixed(1) + 'km' + (s.durFromPrev > 0 ? ' · ' + legDurText(s) : '') +
+              (straightRoad ? ' (직선)' : '') + '</span>';
+          }
 
           li.innerHTML = '<span class="num" style="background:' + esc(d.color) + '">' + esc(s.n) + '</span>' +
                          '<div class="info">' +
@@ -1727,6 +1947,11 @@ window.addEventListener('DOMContentLoaded', function () {
                          (s.note ? '<small>' + esc(s.note) + '</small>' : '') +
                          '</div>';
 
+          var sel = li.querySelector('.mode-select');
+          if (sel) {
+            sel.addEventListener('click', function (e) { e.stopPropagation(); });
+            sel.addEventListener('change', function () { changeStopMode(trip, s, sel.value); });
+          }
           li.addEventListener('click', function () {
             stopTour();
             activeTourIndex = activeStops.indexOf(s);
@@ -1742,12 +1967,49 @@ window.addEventListener('DOMContentLoaded', function () {
         ? (daysDiff === 1 ? '📅 ' + trip.startDate + ' (당일)' : '📅 ' + trip.startDate + ' ~ ' + trip.endDate + ' (' + daysDiff + '일간)')
         : '📅 날짜 미지정';
 
+      var usedModes = TRANSPORT_ORDER.filter(function (k) { return modeKm[k] != null; });
+      var durStr = totalDur > 0 ? ' · ' + (anyEst ? '약 ' : '') + fmtDuration(totalDur) : '';
+      var moveHtml;
+      if (usedModes.length <= 1 && (!usedModes.length || usedModes[0] === 'car')) {
+        // 자동차만: 기존 표시 (도로/직선)
+        moveHtml = '<span class="stat-pill" title="' + (roadCount === roadNeed ? '실제 도로 기준' : roadCount ? '일부 구간은 직선 거리' : '직선 거리 (관리자가 도로 경로를 계산하면 바뀝니다)') + '">' +
+          '🚗 ' + (roadNeed && roadCount === roadNeed ? '도로' : roadCount ? '이동' : '직선') + ' 약 ' + totalDist.toFixed(1) + 'km' + durStr + '</span>';
+      } else {
+        moveHtml = '<span class="stat-pill" title="' + (anyEst ? '자동차 외 수단의 시간은 평균 속도로 추정한 값입니다' : '') + '">🧭 이동 약 ' +
+          totalDist.toFixed(1) + 'km' + durStr + '</span>' +
+          '<span class="stat-pill" title="수단별 이동 거리">' + usedModes.map(function (k) {
+            return TRANSPORT_MODES[k].icon + ' ' + modeKm[k].toFixed(1) + 'km';
+          }).join(' · ') + '</span>';
+      }
+
       statsBarEl.innerHTML =
         '<span class="stat-pill highlight">' + esc(periodStr) + '</span>' +
-        '<span class="stat-pill">📍 방문 ' + activeStops.length + '곳</span>' +
-        '<span class="stat-pill" title="' + (roadCount === legCount ? '실제 도로 기준' : roadCount ? '일부 구간은 직선 거리' : '직선 거리 (관리자가 도로 경로를 계산하면 바뀝니다)') + '">' +
-          '🚗 ' + (legCount && roadCount === legCount ? '도로' : roadCount ? '이동' : '직선') + ' 약 ' + totalDist.toFixed(1) + 'km' +
-          (totalDur > 0 ? ' · ' + fmtDuration(totalDur) : '') + '</span>';
+        '<span class="stat-pill">📍 방문 ' + activeStops.length + '곳</span>' + moveHtml;
+    }
+
+    // 관리자: 목록에서 구간 이동수단 변경 -> 저장 -> (자동차/버스로 바뀐 구간 등) 필요한 일차만 도로 경로 재계산
+    function changeStopMode(trip, s, mode) {
+      if (!isAdmin || !TRANSPORT_MODES[mode]) return;
+      var prev = s.mode;
+      if (mode === 'car') delete s.mode; else s.mode = mode;
+      var tab = currentTab;
+      rerenderTrip(tab);
+      statusEl.textContent = s.name + ' 구간을 ' + TRANSPORT_MODES[mode].label + '(으)로 바꾸는 중...';
+      upsertTrip(trip).then(function () {
+        return computeRoutesForTrip(trip, true).then(function (r) {
+          if (trip.tripId === currentTripId) rerenderTrip(tab);
+          statusEl.textContent = s.name + ' 구간을 ' + TRANSPORT_MODES[mode].label + '(으)로 저장했습니다.' +
+            (r.failed ? ' (도로 경로 ' + r.failed + '개 구간은 직선 표시)' : '');
+        }, function (err) {
+          console.error(err);
+          statusEl.textContent = '이동수단은 저장했지만 도로 경로 계산에 실패해 직선으로 표시합니다: ' + errMsg(err);
+        });
+      }, function (err) {
+        console.error(err);
+        if (prev) s.mode = prev; else delete s.mode;
+        alert('저장 실패: ' + errMsg(err) + '\n서버의 최신 일정으로 다시 불러옵니다.');
+        reloadTrips(currentTripId);
+      });
     }
 
     // 6. 두 지점 사이 트래블러 이동 애니메이션 (카메라가 차를 따라감)
@@ -1792,10 +2054,12 @@ window.addEventListener('DOMContentLoaded', function () {
       var startTime = performance.now();
       var animDuration = durationMs;
 
-      // 바로 이전 장소에서 온 경우 + 도로 경로가 있으면 도로를 따라 이동, 아니면 직선 이동
-      var pts = (toStop.roadLeg && fromStop.dayId === toStop.dayId && toStop.legPath &&
-                 fromStop.n === toStop.n - 1)
-        ? toStop.legPath
+      // 바로 이전 장소에서 온 경우: 그 구간의 수단 아이콘으로, 그려진 경로(도로/직선/곡선)를 따라 이동
+      // 그 외(다른 일차로 넘어가는 등): 자동차 아이콘으로 직선 이동
+      var consecutive = fromStop.dayId === toStop.dayId && fromStop.n === toStop.n - 1 && toStop.legPts;
+      travelerEl.textContent = TRANSPORT_MODES[consecutive ? toStop.legMode : 'car'].icon;
+      var pts = consecutive
+        ? toStop.legPts
         : [[fromStop.lat, fromStop.lng], [toStop.lat, toStop.lng]];
       var cum = [0];
       for (var i = 1; i < pts.length; i++) {
@@ -1864,9 +2128,10 @@ window.addEventListener('DOMContentLoaded', function () {
         '<span class="tag" style="background:' + esc(s.color) + '">' + esc(s.dayNumber) + '일차 · ' + esc(s.n) + '번째</span>' +
         '<div class="title">' + esc(s.n) + '. ' + esc(s.name) + '</div>' +
         '<div class="desc">' +
-          (s.distFromPrev > 0
-            ? '이전 장소에서 ' + (s.roadLeg ? '도로' : '직선') + ' 약 <b>' + s.distFromPrev.toFixed(2) + 'km</b>' +
-              (s.durFromPrev > 0 ? ' (자동차 약 ' + fmtDuration(s.durFromPrev) + ')' : '') + '<br>'
+          (s.legPts
+            ? '이전 장소에서 ' + TRANSPORT_MODES[s.legMode].icon + ' ' + TRANSPORT_MODES[s.legMode].label + ' · ' +
+              (s.roadLeg ? '도로' : '직선') + ' 약 <b>' + s.distFromPrev.toFixed(2) + 'km</b>' +
+              (s.durFromPrev > 0 ? ' (약 ' + fmtDuration(s.durFromPrev) + (s.durEst ? ', 추정' : '') + ')' : '') + '<br>'
             : '일정 출발지<br>') +
           (s.note ? esc(s.note) : '') +
         '</div>' +
@@ -1887,12 +2152,13 @@ window.addEventListener('DOMContentLoaded', function () {
       document.getElementById('sp-meta').textContent = s.dayName + ' (' + (idx + 1) + '/' + activeStops.length + ')';
       document.getElementById('sp-meta').style.color = s.color;
       document.getElementById('sp-title').textContent = s.name;
-      var sameDayNext = nextStop && nextStop.dayId === s.dayId && nextStop.distFromPrev > 0;
+      var sameDayNext = nextStop && nextStop.dayId === s.dayId && !!nextStop.legPts;
       document.getElementById('sp-sub').textContent = nextStop
         ? '다음: ' + nextStop.name + ' (' +
+            (sameDayNext ? TRANSPORT_MODES[nextStop.legMode].icon + ' ' : '') +
             (sameDayNext && nextStop.roadLeg ? '도로 ' : '직선 ') + '약 ' +
             (sameDayNext ? nextStop.distFromPrev : calcDistanceKm(s, nextStop)).toFixed(1) + 'km' +
-            (sameDayNext && nextStop.durFromPrev > 0 ? ' · ' + fmtDuration(nextStop.durFromPrev) : '') + ')'
+            (sameDayNext && nextStop.durFromPrev > 0 ? ' · ' + legDurText(nextStop) : '') + ')'
         : '현재 코스의 마지막 도착지입니다.';
       spotlightCard.classList.add('show');
 
@@ -1908,7 +2174,7 @@ window.addEventListener('DOMContentLoaded', function () {
       var from = prevStopForAnim && prevStopForAnim !== s ? prevStopForAnim : null;
       if (from) {
         // 출발 장소에서 시작해 차를 따라 카메라 이동 (구간 길이에 맞춰 확대 수준 조정)
-        var legKm = (s.roadLeg && from.dayId === s.dayId && from.n === s.n - 1 && s.distFromPrev > 0)
+        var legKm = (s.legPts && from.dayId === s.dayId && from.n === s.n - 1 && s.distFromPrev > 0)
           ? s.distFromPrev : calcDistanceKm(from, s);
         var level = followLevelFor(legKm);
         if (map.getLevel() !== level) map.setLevel(level);
@@ -2080,7 +2346,7 @@ window.addEventListener('DOMContentLoaded', function () {
         var targetDayNum = parseInt(inputDaySelect.value, 10) || 1;
         var dayObj = trip.days.find(function (d) { return Number(d.dayNumber) === targetDayNum; });
         if (dayObj && dayObj.stops) {
-          inputStopsText.value = dayObj.stops.map(function (s) { return s.name; }).join('\n');
+          inputStopsText.value = dayObj.stops.map(stopToLine).join('\n');
         } else {
           inputStopsText.value = '';
         }
@@ -2124,7 +2390,7 @@ window.addEventListener('DOMContentLoaded', function () {
       updateCalendarUI(curDayNum);
 
       if (activeDayObj && activeDayObj.stops) {
-        inputStopsText.value = activeDayObj.stops.map(function (s) { return s.name; }).join('\n');
+        inputStopsText.value = activeDayObj.stops.map(stopToLine).join('\n');
       } else {
         inputStopsText.value = '';
       }
@@ -2152,8 +2418,26 @@ window.addEventListener('DOMContentLoaded', function () {
         return;
       }
 
-      var rawNames = text.split(/[\n,]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+      // 한 줄 = "장소명" 또는 "장소명 @이동수단" (이전 장소에서 이 장소까지 온 수단, 생략하면 자동차)
+      var rawNames = [], rawModes = [], badModes = [];
+      text.split(/[\n,]+/).forEach(function (line) {
+        line = line.trim();
+        if (!line) return;
+        var m = line.match(/^(.*?)\s*@\s*([^@]*)$/), mode = 'car';
+        if (m && m[1].trim()) {
+          mode = parseTransportMode(m[2]);
+          if (!mode) badModes.push(line);
+          line = m[1].trim();
+        }
+        rawNames.push(line);
+        rawModes.push(mode || 'car');
+      });
       if (!rawNames.length) return;
+      if (badModes.length) {
+        alert('알 수 없는 이동수단이 있습니다:\n' + badModes.join('\n') + '\n\n쓸 수 있는 이동수단: ' +
+          TRANSPORT_ORDER.map(function (k) { return TRANSPORT_MODES[k].label; }).join(', '));
+        return;
+      }
 
       // 기존에 등록된 장소들의 좌표 캐시 맵 구성 (수정 시 정확한 기존 좌표 보존용)
       var knownStopCache = {};
@@ -2176,6 +2460,9 @@ window.addEventListener('DOMContentLoaded', function () {
           saveBtn.disabled = false;
           saveBtn.textContent = '저장 및 동선 반영';
           modalForm.style.display = 'none';
+          resolvedStops.forEach(function (s, i) {
+            if (i > 0 && rawModes[i] !== 'car') s.mode = rawModes[i];
+          });
           applyTripSave(tripTitle, sDate, eDate, diffDays, selectedDayNum, resolvedStops);
           return;
         }
@@ -2490,13 +2777,13 @@ window.addEventListener('DOMContentLoaded', function () {
       loadXlsx().then(function (XLSX) {
         var header = EXCEL_COLUMNS.map(function (c) { return c.label; });
         var ws = XLSX.utils.aoa_to_sheet([header,
-          ['전주 1박 2일 (예시)', '2026-12-05', '2026-12-06', 1, 1, '전주역', '', '', '여행 출발'],
-          ['', '', '', 1, 2, '전주한옥마을', '', '', ''],
-          ['', '', '', 1, 3, '경기전', 35.8154, 127.1496, '좌표를 알면 직접 입력 (검색보다 정확)'],
-          ['', '', '', 2, 1, '오목대', '', '', ''],
-          ['', '', '', 2, 2, '전주고속버스터미널', '', '', '여행 종료']
+          ['전주 1박 2일 (예시)', '2026-12-05', '2026-12-06', 1, 1, '전주역', '', '', '여행 출발', ''],
+          ['', '', '', 1, 2, '전주한옥마을', '', '', '', '버스'],
+          ['', '', '', 1, 3, '경기전', 35.8154, 127.1496, '좌표를 알면 직접 입력 (검색보다 정확)', '도보'],
+          ['', '', '', 2, 1, '오목대', '', '', '', ''],
+          ['', '', '', 2, 2, '전주고속버스터미널', '', '', '여행 종료', '자동차']
         ]);
-        ws['!cols'] = [{ wch: 22 }, { wch: 12 }, { wch: 12 }, { wch: 6 }, { wch: 6 }, { wch: 22 }, { wch: 11 }, { wch: 11 }, { wch: 34 }];
+        ws['!cols'] = [{ wch: 22 }, { wch: 12 }, { wch: 12 }, { wch: 6 }, { wch: 6 }, { wch: 22 }, { wch: 11 }, { wch: 11 }, { wch: 34 }, { wch: 10 }];
         var guide = XLSX.utils.aoa_to_sheet([
           ['열', '필수', '설명'],
           ['여행제목', '필수', '같은 제목의 행들이 한 여행이 됩니다. 첫 행에만 쓰고 아래는 비워도 됩니다. 이미 있는 제목이면 그 여행 전체를 이 파일 내용으로 바꿉니다.'],
@@ -2507,7 +2794,10 @@ window.addEventListener('DOMContentLoaded', function () {
           ['장소명', '필수', '카카오맵에서 검색되는 이름. 같은 이름이 여러 곳이면 "전주 경기전"처럼 지역을 붙이세요.'],
           ['위도', '선택', '예: 35.8154 (경도와 함께 입력). 비우면 이미 등록된 같은 이름의 장소 → 카카오 장소 검색 순으로 채웁니다.'],
           ['경도', '선택', '예: 127.1496'],
-          ['메모', '선택', '목록과 정보창에 표시됩니다. 비워 두고 검색으로 찾은 장소에는 주소가 들어갑니다.']
+          ['메모', '선택', '목록과 정보창에 표시됩니다. 비워 두고 검색으로 찾은 장소에는 주소가 들어갑니다.'],
+          ['이동수단', '선택', '이전 장소에서 이 장소까지 이동한 수단: ' +
+            TRANSPORT_ORDER.map(function (k) { return TRANSPORT_MODES[k].label; }).join(', ') +
+            '. 비우면 자동차. 자동차·버스만 실제 도로 경로로 그리고, 나머지는 직선(비행기는 곡선)과 예상 시간으로 표시합니다. 일차의 첫 장소는 무시됩니다.']
         ]);
         guide['!cols'] = [{ wch: 10 }, { wch: 6 }, { wch: 95 }];
         var wb = XLSX.utils.book_new();
@@ -2622,7 +2912,7 @@ window.addEventListener('DOMContentLoaded', function () {
               : (s.addr || s.note || '');
             rowsHtml += '<tr' + (s.src === 'fail' ? ' class="fail"' : '') + '>' +
               '<td>' + d.dayNumber + '일차</td><td>' + (idx + 1) + '</td>' +
-              '<td>' + esc(s.name) +
+              '<td>' + (idx > 0 ? '<span title="' + esc(TRANSPORT_MODES[stopMode(s)].label) + '(으)로 이동">' + TRANSPORT_MODES[stopMode(s)].icon + '</span> ' : '') + esc(s.name) +
                 (s.src === 'search' && s.placeName && s.placeName !== s.name ? '<br><small>검색 결과: ' + esc(s.placeName) + '</small>' : '') + '</td>' +
               '<td class="src src-' + s.src + '">' + EXCEL_SRC_LABEL[s.src] + '</td>' +
               '<td>' + esc(detail) + '</td></tr>';
@@ -2674,6 +2964,7 @@ window.addEventListener('DOMContentLoaded', function () {
               var o = { n: i + 1, name: s.name, lat: s.lat, lng: s.lng };
               if (s.kid) o.kid = s.kid;
               if (s.note) o.note = s.note;
+              if (i > 0 && s.mode && s.mode !== 'car') o.mode = s.mode;
               return o;
             })
           };
