@@ -412,6 +412,37 @@
   .modal-actions .btn-cancel { background: #fff; color: var(--muted); }
   .modal-actions .btn-save { background: var(--brand); color: #fff; border-color: var(--brand); }
 
+  /* 경유 규칙 모달 */
+  .rule-form { border: 1px solid var(--line); border-radius: 9px; padding: 14px; margin-top: 12px; background: #fbfcfb; }
+  .rule-form h3 { margin: 0 0 12px; font-size: 15px; color: #15382e; }
+  .rule-check { display: flex !important; align-items: center; gap: 6px; font-weight: 500 !important; margin-bottom: 6px; }
+  .rule-check input { width: auto !important; }
+  .rule-picker .row { display: flex; gap: 6px; }
+  .rule-picker .row input { flex: 1; }
+  .rule-picker .row button {
+    font: inherit; font-size: 12.5px; font-weight: 700; padding: 0 12px; border-radius: 7px;
+    border: 1px solid var(--line); background: #fff; cursor: pointer; white-space: nowrap;
+  }
+  .rule-picker .results { margin-top: 6px; border: 1px solid var(--line); border-radius: 7px; max-height: 180px; overflow-y: auto; background: #fff; }
+  .rule-picker .results:empty { display: none; }
+  .rule-picker .results button {
+    display: block; width: 100%; text-align: left; font: inherit; font-size: 12.5px; padding: 6px 10px;
+    border: 0; border-top: 1px solid var(--line); background: #fff; cursor: pointer;
+  }
+  .rule-picker .results button:first-child { border-top: 0; }
+  .rule-picker .results button:hover { background: #eff7f3; }
+  .rule-picker .results small { color: var(--muted); margin-left: 6px; }
+  .rule-picker .picked { margin-top: 6px; font-size: 12.5px; color: var(--brand); font-weight: 700; }
+  .rule-picker .picked:empty { display: none; }
+  .rule-picker .picked small { color: var(--muted); font-weight: 400; }
+  .rule-picker.disabled { opacity: 0.45; pointer-events: none; }
+  .rules-table td .acts { display: flex; gap: 4px; }
+  .rules-table td .acts button {
+    font: inherit; font-size: 11.5px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line);
+    background: #fff; cursor: pointer;
+  }
+  .rules-table tr.off td { color: var(--muted); }
+
   /* 엑셀 등록 모달 */
   .excel-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
   .excel-actions button, .excel-actions .file-btn {
@@ -535,6 +566,7 @@
       <button id="btn-copy" type="button">좌표 복사</button>
       <button id="btn-open-excel" class="admin-only" type="button" title="엑셀 파일로 여러 여행/일차를 한 번에 등록하거나 수정합니다">📥 엑셀 등록</button>
       <button id="btn-calc-route" class="admin-only" type="button" title="현재 여행의 모든 일차를 실제 도로 경로로 다시 계산해 저장합니다">🛣 도로 경로 계산</button>
+      <button id="btn-open-rules" class="admin-only" type="button" title="특정 장소에 들어오고 나갈 때 항상 지나갈 경유지를 정합니다">🧭 경유 규칙</button>
       <button id="btn-reset-sample" class="admin-only" type="button" style="color:var(--muted); font-size:11px;" title="전주·임실 샘플 여행을 원래대로 되돌립니다 (다른 여행은 그대로)">샘플 복원</button>
     </div>
     <div class="tour-progress-wrap">
@@ -650,6 +682,59 @@
     <div class="modal-actions">
       <button type="button" class="btn-cancel" id="btn-excel-close">닫기</button>
       <button type="button" class="btn-save" id="btn-excel-save" disabled>저장 및 동선 반영</button>
+    </div>
+  </div>
+</div>
+
+<!-- 경유 규칙 모달 (관리자 전용) -->
+<div class="modal-overlay" id="modal-rules" style="display:none;">
+  <div class="modal-card" style="max-width:760px;">
+    <h2>경유 규칙</h2>
+    <p class="sub">
+      기준 장소 반경 안에 있는 행선지로 <b>들어올 때</b>(이전 장소 → 경유지 → 이 장소)와
+      <b>나갈 때</b>(이 장소 → 경유지 → 다음 장소) 항상 지나갈 지점을 정합니다.
+      규칙을 바꾼 뒤 <b>모든 여행에 적용</b>을 눌러야 지도 경로에 반영됩니다.
+    </p>
+    <div id="rules-msg"></div>
+    <div id="rules-list"></div>
+    <div class="excel-actions" style="margin-top:10px;">
+      <button type="button" id="btn-rule-new">+ 규칙 추가</button>
+    </div>
+
+    <div id="rule-form" class="rule-form" style="display:none;">
+      <h3 id="rule-form-title">새 규칙</h3>
+      <div class="form-group">
+        <label>기준 장소 (이 장소에 들어오고 나갈 때 규칙 적용)</label>
+        <div class="rule-picker" data-picker="base"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="margin-bottom:0;">
+          <label>규칙 이름</label>
+          <input type="text" id="input-rule-name" placeholder="비우면 기준 장소 이름">
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label>반경 (m)</label>
+          <input type="number" id="input-rule-radius" min="5" max="2000" step="5" value="50">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>들어올 때 경유지</label>
+        <div class="rule-picker" data-picker="in"></div>
+      </div>
+      <div class="form-group">
+        <label>나갈 때 경유지</label>
+        <label class="rule-check"><input type="checkbox" id="input-rule-same" checked> 들어올 때와 같은 곳</label>
+        <div class="rule-picker" data-picker="out"></div>
+      </div>
+      <div class="modal-actions" style="margin-top:6px;">
+        <button type="button" class="btn-cancel" id="btn-rule-cancel">취소</button>
+        <button type="button" class="btn-save" id="btn-rule-save">규칙 저장</button>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn-cancel" id="btn-rules-close">닫기</button>
+      <button type="button" class="btn-save" id="btn-rules-apply" title="규칙이 바뀐 구간만 도로 경로를 다시 계산해 저장합니다">모든 여행에 적용</button>
     </div>
   </div>
 </div>
@@ -805,13 +890,111 @@ function fmtDuration(sec) {
   return h + '시간' + (r ? ' ' + r + '분' : '');
 }
 
-function requestRoadRoute(stops) {
+/**
+ * 경유 규칙 (Supabase route_rules 표, 관리자만 읽기/쓰기)
+ * 규칙 = 기준 장소(lat,lng) + 반경(radius_m) + 들어올 때 경유지(in_*) + 나갈 때 경유지(out_*)
+ * 도로 경로를 계산할 때 규칙에 걸리는 구간(A->B)에 경유지를 끼워 넣어 계산하고,
+ * 돌아온 작은 구간들을 다시 A->B 한 구간으로 합쳐 저장함 (화면에는 경유지가 장소로 나오지 않음).
+ * day.route.rulesSig = 계산 때 끼워 넣은 경유지 목록. 규칙이 바뀌면 달라져서 다시 계산 대상이 됨.
+ */
+var routeRules = null; // null = 아직 안 불러옴
+
+function fetchRouteRules() {
+  return sb.from('route_rules').select('*').order('id').then(function (res) {
+    if (res.error) {
+      // 아직 SQL을 실행하지 않아 표가 없으면 규칙 없음으로 처리
+      if (res.error.code === '42P01' || res.error.code === 'PGRST205') {
+        console.warn('route_rules 표가 없습니다 (supabase/schema.sql 5번 실행 필요). 경유 규칙 없이 계산합니다.');
+        return [];
+      }
+      throw res.error;
+    }
+    return res.data || [];
+  });
+}
+
+function ensureRouteRules(force) {
+  if (routeRules && !force) return Promise.resolve(routeRules);
+  return fetchRouteRules().then(function (list) { routeRules = list; return list; });
+}
+
+function distM(a, b) {
+  return calcDistanceKm({ lat: Number(a.lat), lng: Number(a.lng) }, { lat: Number(b.lat), lng: Number(b.lng) }) * 1000;
+}
+
+// 장소에 걸리는 규칙 (반경 안에서 가장 가까운 것 하나)
+function matchRouteRule(stop, rules) {
+  var best = null, bestD = Infinity;
+  (rules || []).forEach(function (r) {
+    if (!r.enabled) return;
+    var d = distM(stop, r);
+    if (d <= (Number(r.radius_m) || 50) && d < bestD) { best = r; bestD = d; }
+  });
+  return best;
+}
+
+// 장소 목록 -> 길찾기에 보낼 지점 목록(경유지 포함) + 원래 구간별 [시작 지점 index, 작은 구간 수] + 규칙 서명
+function planRoutePoints(stops, rules) {
+  var pt = function (s) { return { lat: Number(s.lat), lng: Number(s.lng) }; };
+  var fix = function (p) { return Number(p.lat).toFixed(5) + ',' + Number(p.lng).toFixed(5); };
+  var points = [], spans = [], sigParts = [];
+  if (!stops || !stops.length) return { points: points, spans: spans, sig: '' };
+  var matched = stops.map(function (s) { return matchRouteRule(s, rules); });
+  points.push(pt(stops[0]));
+  for (var i = 0; i < stops.length - 1; i++) {
+    var ra = matched[i], rb = matched[i + 1], vias = [];
+    // 같은 규칙 장소 안에서 움직이는 구간(예: 같은 건물 두 장소)은 경유하지 않음
+    if (!(ra && rb && ra.id === rb.id)) {
+      if (ra && ra.out_lat != null) vias.push({ lat: Number(ra.out_lat), lng: Number(ra.out_lng) });
+      if (rb && rb.in_lat != null) vias.push({ lat: Number(rb.in_lat), lng: Number(rb.in_lng) });
+    }
+    var start = points.length - 1, used = [];
+    vias.forEach(function (v) {
+      if (distM(points[points.length - 1], v) < 5) return; // 같은 지점 두 번 경유 방지
+      points.push(v);
+      used.push(fix(v));
+    });
+    points.push(pt(stops[i + 1]));
+    spans.push([start, points.length - 1 - start]);
+    if (used.length) sigParts.push(i + ':' + used.join(';'));
+  }
+  return { points: points, spans: spans, sig: sigParts.join('|') };
+}
+
+// 작은 구간들을 원래 구간 하나로 합침. 실패한 작은 구간은 직선으로 이어 붙임 (전부 실패면 null)
+function mergeSubLegs(subLegs, points, start, count) {
+  if (count === 1) return subLegs[start];
+  var path = [], distance = 0, duration = 0, ok = 0;
+  for (var k = 0; k < count; k++) {
+    var leg = subLegs[start + k], p = points[start + k], q = points[start + k + 1];
+    var good = !!(leg && Array.isArray(leg.path) && leg.path.length >= 2);
+    var seg = good ? leg.path : [[p.lat, p.lng], [q.lat, q.lng]];
+    if (good) ok++;
+    distance += good ? Number(leg.distance) || 0 : Math.round(distM(p, q));
+    duration += good ? Number(leg.duration) || 0 : 0;
+    seg.forEach(function (c, j) {
+      var last = path[path.length - 1];
+      if (j === 0 && last && last[0] === c[0] && last[1] === c[1]) return;
+      path.push(c);
+    });
+  }
+  if (!ok) return null;
+  return { distance: distance, duration: duration, path: path, via: count - 1 };
+}
+
+// 저장된 경로가 지금 장소 + 지금 규칙 기준으로도 맞는지 (관리자 재계산 판단용)
+function routeUpToDate(day, rules) {
+  return hasFreshRoute(day) && (day.route.rulesSig || '') === planRoutePoints(day.stops, rules).sig;
+}
+
+function requestRoadRoute(stops, rules) {
   var sig = stopsSig(stops);
   if (!stops || stops.length < 2) {
-    return Promise.resolve({ sig: sig, computedAt: new Date().toISOString(), legs: [] });
+    return Promise.resolve({ sig: sig, computedAt: new Date().toISOString(), legs: [], failed: 0 });
   }
+  var plan = planRoutePoints(stops, rules);
   return sb.functions.invoke('route', {
-    body: { points: stops.map(function (s) { return { lat: Number(s.lat), lng: Number(s.lng) }; }) }
+    body: { points: plan.points }
   }).then(function (res) {
     if (res.error) {
       var ctx = res.error.context;
@@ -823,11 +1006,16 @@ function requestRoadRoute(stops) {
       throw res.error;
     }
     var d = res.data;
-    if (!d || !Array.isArray(d.legs) || d.legs.length !== stops.length - 1) {
+    if (!d || !Array.isArray(d.legs) || d.legs.length !== plan.points.length - 1) {
       throw new Error('경로 응답 형식이 올바르지 않습니다.');
     }
     if (d.errors && d.errors.length) console.warn('도로 경로 일부 실패:', d.errors);
-    return { sig: sig, computedAt: new Date().toISOString(), legs: d.legs, failed: (d.errors || []).length };
+    var legs = plan.spans.map(function (sp) { return mergeSubLegs(d.legs, plan.points, sp[0], sp[1]); });
+    var route = { sig: sig, computedAt: new Date().toISOString(), legs: legs };
+    if (plan.sig) route.rulesSig = plan.sig;
+    // 직선으로 남은 작은 구간 수
+    route.failed = d.legs.filter(function (l) { return !l; }).length;
+    return route;
   });
 }
 
@@ -1124,6 +1312,7 @@ window.addEventListener('DOMContentLoaded', function () {
     // 1. 관리자 모드 전환 (Supabase 로그인 + admins 표 등록 여부로 판단)
     function setAdminState(state) {
       isAdmin = state;
+      if (!isAdmin) routeRules = null; // 다른 계정으로 바뀌면 규칙을 다시 불러오도록
       document.body.classList.toggle('is-admin', isAdmin);
       authBtn.classList.toggle('logged-in', !!sessionEmail);
       if (isAdmin) {
@@ -2132,22 +2321,24 @@ window.addEventListener('DOMContentLoaded', function () {
     // 반환: { days: 계산한 일차 수, failed: 직선으로 남은 구간 수 }
     function computeRoutesForTrip(trip, onlyStale) {
       if (!sb) return Promise.reject(new Error('Supabase에 연결되지 않았습니다.'));
-      var targets = trip.days.filter(function (d) {
-        return (d.stops || []).length >= 1 && (!onlyStale || !hasFreshRoute(d));
-      });
-      var failed = 0;
-      var chain = Promise.resolve();
-      targets.forEach(function (d, i) {
-        chain = chain.then(function () {
-          statusEl.textContent = '도로 경로 계산 중... (' + (i + 1) + '/' + targets.length + ') ' + (d.dayName || '');
-          return requestRoadRoute(d.stops).then(function (route) {
-            failed += route.legs.filter(function (l) { return !l; }).length;
-            delete route.failed;
-            d.route = route;
+      var targets = [], failed = 0;
+      return ensureRouteRules().then(function (rules) {
+        targets = trip.days.filter(function (d) {
+          return (d.stops || []).length >= 1 && (!onlyStale || !routeUpToDate(d, rules));
+        });
+        var chain = Promise.resolve();
+        targets.forEach(function (d, i) {
+          chain = chain.then(function () {
+            statusEl.textContent = '도로 경로 계산 중... (' + (i + 1) + '/' + targets.length + ') ' + (d.dayName || '');
+            return requestRoadRoute(d.stops, rules).then(function (route) {
+              failed += route.failed || 0;
+              delete route.failed;
+              d.route = route;
+            });
           });
         });
-      });
-      return chain.then(function () {
+        return chain;
+      }).then(function () {
         if (!targets.length) return;
         return upsertTrip(trip);
       }).then(function () {
@@ -2556,6 +2747,277 @@ window.addEventListener('DOMContentLoaded', function () {
       }).finally(function () {
         btn.disabled = false;
       });
+    });
+
+    // ---------------------------------------------------------------------
+    // 경유 규칙 모달 (관리자 전용)
+    // ---------------------------------------------------------------------
+    var geocoder = new kakao.maps.services.Geocoder();
+    var modalRules = document.getElementById('modal-rules');
+    var rulesListEl = document.getElementById('rules-list');
+    var rulesMsgEl = document.getElementById('rules-msg');
+    var ruleFormEl = document.getElementById('rule-form');
+    var ruleNameInput = document.getElementById('input-rule-name');
+    var ruleRadiusInput = document.getElementById('input-rule-radius');
+    var ruleSameInput = document.getElementById('input-rule-same');
+    var editingRuleId = null;
+    var rulesChanged = false;
+
+    function rulesMsg(kind, html) {
+      rulesMsgEl.innerHTML = html ? '<div class="excel-msg ' + kind + '">' + html + '</div>' : '';
+    }
+
+    // 장소 검색: 등록된 행선지 + 카카오 주소 검색 + 카카오 키워드 검색
+    function searchPlacesForRule(q) {
+      var out = [], seen = {};
+      trips.forEach(function (t) {
+        t.days.forEach(function (d) {
+          (d.stops || []).forEach(function (s) {
+            if (String(s.name).indexOf(q) === -1 && String(s.note || '').indexOf(q) === -1) return;
+            var key = Number(s.lat).toFixed(5) + ',' + Number(s.lng).toFixed(5);
+            if (seen[key]) return;
+            seen[key] = 1;
+            out.push({ name: s.name, sub: '등록된 행선지' + (s.note ? ' · ' + s.note : ''), lat: Number(s.lat), lng: Number(s.lng) });
+          });
+        });
+      });
+      out = out.slice(0, 5);
+      var addr = new Promise(function (resolve) {
+        geocoder.addressSearch(q, function (res, st) {
+          if (st !== kakao.maps.services.Status.OK) return resolve([]);
+          resolve(res.slice(0, 3).map(function (a) {
+            var b = a.road_address && a.road_address.building_name;
+            return { name: a.address_name + (b ? ' (' + b + ')' : ''), sub: '주소', lat: parseFloat(a.y), lng: parseFloat(a.x) };
+          }));
+        });
+      });
+      var kw = new Promise(function (resolve) {
+        placesService.keywordSearch(q, function (res, st) {
+          if (st !== kakao.maps.services.Status.OK) return resolve([]);
+          resolve(res.slice(0, 8).map(function (p) {
+            return { name: p.place_name, sub: p.road_address_name || p.address_name, lat: parseFloat(p.y), lng: parseFloat(p.x) };
+          }));
+        });
+      });
+      return Promise.all([addr, kw]).then(function (r) { return out.concat(r[0], r[1]); });
+    }
+
+    // 장소 선택 칸 (검색창 + 결과 목록 + 선택된 장소)
+    var pickers = {};
+    Array.prototype.forEach.call(document.querySelectorAll('.rule-picker'), function (el) {
+      var key = el.getAttribute('data-picker');
+      el.innerHTML =
+        '<div class="row"><input type="text" placeholder="장소명 또는 주소 검색"><button type="button" class="go">검색</button>' +
+        (key === 'base' ? '' : '<button type="button" class="clear">없음</button>') + '</div>' +
+        '<div class="results"></div><div class="picked"></div>';
+      var input = el.querySelector('input'), resultsEl = el.querySelector('.results'), pickedEl = el.querySelector('.picked');
+      var picker = {
+        el: el, value: null,
+        set: function (v) {
+          picker.value = v;
+          resultsEl.innerHTML = '';
+          pickedEl.innerHTML = v
+            ? '✔ ' + esc(v.name) + ' <small>(' + v.lat.toFixed(5) + ', ' + v.lng.toFixed(5) + ')</small>'
+            : '';
+          if (key === 'base' && v && !ruleNameInput.value.trim()) ruleNameInput.placeholder = v.name;
+        }
+      };
+      function run() {
+        var q = input.value.trim();
+        if (!q) return;
+        resultsEl.innerHTML = '<button type="button" disabled>검색 중...</button>';
+        searchPlacesForRule(q).then(function (list) {
+          if (!list.length) { resultsEl.innerHTML = '<button type="button" disabled>검색 결과가 없습니다.</button>'; return; }
+          resultsEl.innerHTML = list.map(function (p, i) {
+            return '<button type="button" data-i="' + i + '">' + esc(p.name) + '<small>' + esc(p.sub || '') + '</small></button>';
+          }).join('');
+          Array.prototype.forEach.call(resultsEl.querySelectorAll('button[data-i]'), function (b) {
+            b.addEventListener('click', function () { picker.set(list[+b.getAttribute('data-i')]); });
+          });
+        });
+      }
+      el.querySelector('.go').addEventListener('click', run);
+      input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); run(); } });
+      var clr = el.querySelector('.clear');
+      if (clr) clr.addEventListener('click', function () { input.value = ''; picker.set(null); });
+      picker.input = input;
+      pickers[key] = picker;
+    });
+
+    function syncSameCheckbox() {
+      pickers.out.el.classList.toggle('disabled', ruleSameInput.checked);
+    }
+    ruleSameInput.addEventListener('change', syncSameCheckbox);
+
+    function viaOf(r, k) {
+      return r[k + '_lat'] == null ? null : { name: r[k + '_name'] || '경유지', lat: Number(r[k + '_lat']), lng: Number(r[k + '_lng']) };
+    }
+
+    function renderRules() {
+      var list = routeRules || [];
+      if (!list.length) {
+        rulesListEl.innerHTML = '<div class="excel-msg info">등록된 경유 규칙이 없습니다. <b>+ 규칙 추가</b>로 만드세요.</div>';
+        return;
+      }
+      rulesListEl.innerHTML = '<table class="excel-table rules-table"><thead><tr>' +
+        '<th>사용</th><th>규칙 (기준 장소)</th><th>반경</th><th>들어올 때</th><th>나갈 때</th><th></th></tr></thead><tbody>' +
+        list.map(function (r) {
+          var vi = viaOf(r, 'in'), vo = viaOf(r, 'out');
+          return '<tr class="' + (r.enabled ? '' : 'off') + '">' +
+            '<td><input type="checkbox" data-toggle="' + r.id + '"' + (r.enabled ? ' checked' : '') + '></td>' +
+            '<td><b>' + esc(r.name) + '</b><br><small>' + Number(r.lat).toFixed(5) + ', ' + Number(r.lng).toFixed(5) + '</small></td>' +
+            '<td>' + esc(r.radius_m) + 'm</td>' +
+            '<td>' + (vi ? esc(vi.name) : '<small>없음</small>') + '</td>' +
+            '<td>' + (vo ? esc(vo.name) : '<small>없음</small>') + '</td>' +
+            '<td><div class="acts"><button type="button" data-edit="' + r.id + '">수정</button>' +
+            '<button type="button" data-del="' + r.id + '">삭제</button></div></td></tr>';
+        }).join('') + '</tbody></table>';
+
+      var byId = function (id) { return list.find(function (r) { return String(r.id) === String(id); }); };
+      Array.prototype.forEach.call(rulesListEl.querySelectorAll('[data-edit]'), function (b) {
+        b.addEventListener('click', function () { openRuleForm(byId(b.getAttribute('data-edit'))); });
+      });
+      Array.prototype.forEach.call(rulesListEl.querySelectorAll('[data-del]'), function (b) {
+        b.addEventListener('click', function () {
+          var r = byId(b.getAttribute('data-del'));
+          if (!r || !confirm('"' + r.name + '" 규칙을 삭제할까요?\n(삭제 후 "모든 여행에 적용"을 눌러야 경로에 반영됩니다)')) return;
+          ruleWrite(sb.from('route_rules').delete().eq('id', r.id), '규칙을 삭제했습니다.');
+        });
+      });
+      Array.prototype.forEach.call(rulesListEl.querySelectorAll('[data-toggle]'), function (cb) {
+        cb.addEventListener('change', function () {
+          ruleWrite(sb.from('route_rules').update({ enabled: cb.checked }).eq('id', cb.getAttribute('data-toggle')),
+            cb.checked ? '규칙을 켰습니다.' : '규칙을 껐습니다.');
+        });
+      });
+    }
+
+    // 규칙 표 쓰기 후 목록 다시 불러오기
+    function ruleWrite(query, doneMsg) {
+      rulesMsg('info', '저장하는 중...');
+      return query.select('id').then(function (res) {
+        if (res.error) throw res.error;
+        if (!res.data || !res.data.length) throw new Error('권한이 없거나 이미 바뀐 규칙입니다.');
+        rulesChanged = true;
+        return ensureRouteRules(true);
+      }).then(function () {
+        renderRules();
+        rulesMsg('info', doneMsg + ' <b>모든 여행에 적용</b>을 눌러야 지도 경로에 반영됩니다.');
+        return true;
+      }).catch(function (err) {
+        console.error(err);
+        rulesMsg('err', '저장 실패: ' + esc(errMsg(err)));
+        return ensureRouteRules(true).then(renderRules, function () {}).then(function () { return false; });
+      });
+    }
+
+    function openRuleForm(rule) {
+      editingRuleId = rule ? rule.id : null;
+      document.getElementById('rule-form-title').textContent = rule ? '규칙 수정' : '새 규칙';
+      ruleNameInput.value = rule ? rule.name : '';
+      ruleNameInput.placeholder = '비우면 기준 장소 이름';
+      ruleRadiusInput.value = rule ? rule.radius_m : 50;
+      ['base', 'in', 'out'].forEach(function (k) { pickers[k].input.value = ''; pickers[k].set(null); });
+      if (rule) {
+        pickers.base.set({ name: rule.name, lat: Number(rule.lat), lng: Number(rule.lng) });
+        pickers['in'].set(viaOf(rule, 'in'));
+        pickers.out.set(viaOf(rule, 'out'));
+        var vi = viaOf(rule, 'in'), vo = viaOf(rule, 'out');
+        ruleSameInput.checked = !!(vi && vo && vi.lat === vo.lat && vi.lng === vo.lng);
+      } else {
+        ruleSameInput.checked = true;
+      }
+      syncSameCheckbox();
+      ruleFormEl.style.display = 'block';
+      pickers.base.input.focus();
+    }
+
+    document.getElementById('btn-rule-new').addEventListener('click', function () { openRuleForm(null); });
+    document.getElementById('btn-rule-cancel').addEventListener('click', function () { ruleFormEl.style.display = 'none'; });
+
+    document.getElementById('btn-rule-save').addEventListener('click', function () {
+      var base = pickers.base.value;
+      var vin = pickers['in'].value;
+      var vout = ruleSameInput.checked ? vin : pickers.out.value;
+      var radius = parseInt(ruleRadiusInput.value, 10);
+      if (!base) { alert('기준 장소를 검색해서 선택하세요.'); return; }
+      if (!vin && !vout) { alert('들어올 때나 나갈 때 경유지를 하나 이상 선택하세요.'); return; }
+      if (!(radius >= 5 && radius <= 2000)) { alert('반경은 5~2000m 사이로 입력하세요.'); return; }
+      var inside = [vin, vout].find(function (v) { return v && distM(base, v) <= radius; });
+      if (inside) {
+        alert('경유지 "' + inside.name + '"가 기준 장소 반경(' + radius + 'm) 안에 있습니다.\n반경을 줄이거나 다른 경유지를 고르세요.');
+        return;
+      }
+      var row = {
+        name: ruleNameInput.value.trim() || base.name,
+        lat: base.lat, lng: base.lng, radius_m: radius,
+        in_name: vin ? vin.name : null, in_lat: vin ? vin.lat : null, in_lng: vin ? vin.lng : null,
+        out_name: vout ? vout.name : null, out_lat: vout ? vout.lat : null, out_lng: vout ? vout.lng : null
+      };
+      var q = editingRuleId
+        ? sb.from('route_rules').update(row).eq('id', editingRuleId)
+        : sb.from('route_rules').insert(row);
+      var btn = this;
+      btn.disabled = true;
+      ruleWrite(q, editingRuleId ? '규칙을 수정했습니다.' : '규칙을 추가했습니다.').then(function (ok) {
+        if (ok) ruleFormEl.style.display = 'none';
+      }).finally(function () { btn.disabled = false; });
+    });
+
+    document.getElementById('btn-open-rules').addEventListener('click', function () {
+      if (!isAdmin) { alert('관리자 로그인이 필요합니다.'); return; }
+      ruleFormEl.style.display = 'none';
+      rulesChanged = false;
+      rulesMsg('', '');
+      rulesListEl.innerHTML = '<div class="excel-msg info">규칙을 불러오는 중...</div>';
+      modalRules.style.display = 'flex';
+      ensureRouteRules(true).then(renderRules, function (err) {
+        console.error(err);
+        rulesListEl.innerHTML = '';
+        rulesMsg('err', '규칙을 불러오지 못했습니다: ' + esc(errMsg(err)));
+      });
+    });
+
+    document.getElementById('btn-rules-close').addEventListener('click', function () {
+      if (rulesChanged && !confirm('바뀐 규칙을 아직 경로에 적용하지 않았습니다. 그래도 닫을까요?\n(나중에 일정을 저장하거나 "모든 여행에 적용"을 누르면 반영됩니다)')) return;
+      modalRules.style.display = 'none';
+    });
+
+    // 모든 여행에서 장소나 규칙이 바뀐 일차만 다시 계산해 저장
+    document.getElementById('btn-rules-apply').addEventListener('click', function () {
+      if (!isAdmin) return;
+      var btn = this;
+      var real = trips.filter(function (t) { return t.tripId !== ALL_TRIPS_ID; });
+      var tabBefore = currentTab, days = 0, failed = 0, errors = [];
+      btn.disabled = true;
+      stopTour();
+      var chain = ensureRouteRules(true);
+      real.forEach(function (t, k) {
+        chain = chain.then(function () {
+          rulesMsg('info', '경로 다시 계산 중 (' + (k + 1) + '/' + real.length + '): ' + esc(t.tripTitle));
+          return computeRoutesForTrip(t, true).then(function (r) {
+            days += r.days;
+            failed += r.failed;
+          }, function (err) {
+            console.error(err);
+            errors.push(t.tripTitle + ': ' + errMsg(err));
+          });
+        });
+      });
+      chain.then(function () {
+        rulesChanged = false;
+        rerenderTrip(tabBefore);
+        var html = days
+          ? '여행 ' + real.length + '개 중 ' + days + '개 일차의 경로를 다시 계산해 저장했습니다.'
+          : '바뀐 구간이 없어 다시 계산할 일차가 없습니다.';
+        if (failed) html += ' (' + failed + '개 구간은 계산 실패로 직선 표시)';
+        if (errors.length) html += '<ul>' + errors.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ul>';
+        rulesMsg(errors.length ? 'err' : 'info', html);
+        statusEl.textContent = '경유 규칙을 적용했습니다.';
+      }).catch(function (err) {
+        console.error(err);
+        rulesMsg('err', '적용 실패: ' + esc(errMsg(err)));
+      }).finally(function () { btn.disabled = false; });
     });
 
     inputAdminEmail.addEventListener('keydown', function (e) {
